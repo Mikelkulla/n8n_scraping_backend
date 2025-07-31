@@ -5,6 +5,56 @@ from ..selenium.driver_setup_for_scrape import setup_driver, setup_chrome_with_t
 from config.logging import setup_logging
 import logging
 
+def sort_urls_by_email_likelihood(urls):
+    """
+    Sort URLs by likelihood of containing emails based on keywords and length.
+    
+    Args:
+        urls (list): List of URLs to sort.
+    
+    Returns:
+        list: Deduplicated URLs sorted by email likelihood (highest first).
+    """
+    # Keywords indicating high email likelihood
+    email_keywords = [
+        '/contact', '/contact-us', '/contactus', '/contacts',
+        '/whoweare', '/who-we-are', '/who_we_are',
+        '/aboutus', '/about', '/about-us', '/about_us'
+    ]
+    
+    def get_url_score(url):
+        """
+        Calculate a score for a URL based on keywords and length.
+        Higher score = higher email likelihood.
+        """
+        score = 0
+        # Boost score for keyword matches
+        for keyword in email_keywords:
+            if keyword.lower() in url.lower():
+                score += 10  # Significant boost for relevant keywords
+                logging.debug(f"URL {url} matched keyword {keyword}, score += 10")
+        
+        # Slight boost for shorter URLs (inversely proportional to length)
+        length = len(url)
+        length_score = max(0, 100 - length) / 10  # Normalize to 0-10 range
+        score += length_score
+        logging.debug(f"URL {url} length {length}, length_score: {length_score}")
+        
+        return score
+    
+    # Remove duplicates while preserving order
+    unique_urls = list(dict.fromkeys(urls))
+    logging.info(f"Deduplicated URLs: {len(unique_urls)} from {len(urls)}")
+    
+    # Sort URLs by score (descending) and original length (ascending) as tiebreaker
+    sorted_urls = sorted(
+        unique_urls,
+        key=lambda u: (-get_url_score(u), len(u))
+    )
+    
+    logging.info(f"Sorted {len(sorted_urls)} URLs by email likelihood")
+    return sorted_urls
+
 def scrape_emails(base_url, max_pages=10, use_tor=False, headless=False):
     """
     Orchestrate email scraping from a website using sitemaps and WebDriver.
@@ -18,9 +68,6 @@ def scrape_emails(base_url, max_pages=10, use_tor=False, headless=False):
     Returns:
         list: List of unique email addresses found.
     """
-    # # Initialize logging
-    # setup_logging()
-    
     # Initialize WebDriver
     logging.info("Starting Chrome WebDriver...")
     driver = setup_chrome_with_tor(headless=headless) if use_tor else setup_driver(headless=headless)
@@ -61,12 +108,8 @@ def scrape_emails(base_url, max_pages=10, use_tor=False, headless=False):
         else:
             logging.info(f"Ignoring URL from different domain: {url}")
     
-    # Remove duplicates and sort by character length (shortest first)
-    unique_sorted_urls = sorted(
-        list(dict.fromkeys(filtered_urls)),
-        key=lambda u: len(u)
-    )
-    
+    # Sort URLs by email likelihood
+    unique_sorted_urls = sort_urls_by_email_likelihood(filtered_urls)
     logging.info(f"Total URLs to visit after filtering and sorting: {len(unique_sorted_urls)}")
     
     try:
