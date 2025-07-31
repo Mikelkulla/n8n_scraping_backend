@@ -248,19 +248,48 @@ def parse_html_sitemap(content, sitemap_url, driver, depth, max_depth, visited_s
         sitemap_urls = []
         page_urls = []
         
-        # Find table rows containing URLs
-        table = soup.find('table', id='sitemap')
-        if table:
-            for row in table.find('tbody').find_all('tr'):
+        # Find all tables in the HTML
+        tables = soup.find_all('table')
+        selected_table = None
+        
+        # Try specific known structures first (Yoast or Auctollo)
+        for table in tables:
+            # Check for Yoast-style table with id="sitemap"
+            if table.get('id') == 'sitemap':
+                selected_table = table
+                logging.info(f"Found Yoast-style table with id='sitemap' for sitemap: {sitemap_url}")
+                break
+            # Check for Auctollo/WordPress-style table inside <div id="content">
+            if table.find_parent('div', id='content'):
+                selected_table = table
+                logging.info(f"Found Auctollo-style table in <div id='content'> for sitemap: {sitemap_url}")
+                break
+        
+        # Fallback to any table with valid sitemap or page URLs
+        if not selected_table:
+            for table in tables:
+                # Check if table contains valid sitemap or page URLs
+                links = table.find_all('a', href=True)
+                if any(link['href'].endswith('.xml') or urlparse(link['href']).path for link in links):
+                    selected_table = table
+                    logging.info(f"Found generic table with valid URLs for sitemap: {sitemap_url}")
+                    break
+        
+        if selected_table:
+            for row in selected_table.find('tbody').find_all('tr') if selected_table.find('tbody') else selected_table.find_all('tr'):
                 link = row.find('a')
                 if link and link.get('href'):
                     url = link.get('href')
+                    # Ensure URL is absolute
+                    url = urljoin(sitemap_url, url)
                     if url.endswith('.xml'):
                         sitemap_urls.append(url)
                         logging.info(f"Found sitemap URL in HTML: {url}")
                     else:
                         page_urls.append(url)
                         logging.info(f"Found page URL in HTML: {url}")
+        else:
+            logging.warning(f"No suitable table found in HTML sitemap: {sitemap_url}")
         
         # Recursively process sitemap URLs
         urls = page_urls  # Start with page URLs found in HTML
