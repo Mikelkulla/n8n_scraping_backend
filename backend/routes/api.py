@@ -14,7 +14,7 @@ api_bp = Blueprint("api", __name__)
 # Dictionary to track active scraping threads
 active_jobs = {}
 
-@api_bp.route("/scrape", methods=["POST"])
+@api_bp.route("/scrape/website-emails", methods=["POST"])
 def start_scrape():
     """
     Start an email scraping job for a given URL.
