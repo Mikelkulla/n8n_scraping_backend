@@ -2,7 +2,7 @@ from urllib.parse import urlparse
 from .sitemap_parser import get_robots_txt_urls, get_urls_from_sitemap
 from .page_scraper import scrape_page
 from ..selenium.driver_setup_for_scrape import setup_driver, setup_chrome_with_tor
-from config.logging import setup_logging
+from config.job_functions import write_progress, check_stop_signal
 import logging
 
 def sort_urls_by_email_likelihood(urls):
@@ -55,11 +55,12 @@ def sort_urls_by_email_likelihood(urls):
     logging.info(f"Sorted {len(sorted_urls)} URLs by email likelihood")
     return sorted_urls
 
-def scrape_emails(base_url, max_pages=10, use_tor=False, headless=False):
+def scrape_emails(job_id, step_id, base_url, max_pages=10, use_tor=False, headless=False):
     """
     Orchestrate email scraping from a website using sitemaps and WebDriver.
     
     Args:
+        job_id (str): Unique identifier for the job (e.g., UUID).
         base_url (str): Base URL of the website to scrape.
         max_pages (int): Maximum number of pages to scrape.
         use_tor (bool): Whether to use Tor for WebDriver setup.
@@ -69,22 +70,23 @@ def scrape_emails(base_url, max_pages=10, use_tor=False, headless=False):
         list: List of unique email addresses found.
     """
     # Initialize WebDriver
-    logging.info("Starting Chrome WebDriver...")
+    logging.info(f"Starting Chrome WebDriver for job {job_id}...")
     driver = setup_chrome_with_tor(headless=headless) if use_tor else setup_driver(headless=headless)
     if not driver:
-        logging.error("Failed to initialize WebDriver.")
+        logging.error(f"Failed to initialize WebDriver for job {job_id}.")
+        write_progress(job_id, step_id, base_url, max_pages, use_tor, headless, status="failed", error_message="Failed to initialize WebDriver", current_row=0, total_rows=max_pages)
         return []
     
     all_emails = set()
     visited_urls = set()
     urls_to_visit = [base_url]
     
-    logging.info(f"Starting URL: {base_url}")
+    logging.info(f"Starting URL for job {job_id}: {base_url}")
     
     # Discover sitemap URLs from robots.txt
     sitemap_urls = get_robots_txt_urls(driver, base_url)
     sitemap_urls.append(f"{base_url}/sitemap_index.xml")
-    logging.info(f"Sitemap URLs discovered: {sitemap_urls}")
+    logging.info(f"Sitemap URLs discovered for job {job_id}: {sitemap_urls}")
     
     # Discover URLs from sitemap files
     for sitemap_url in sitemap_urls:
@@ -110,16 +112,38 @@ def scrape_emails(base_url, max_pages=10, use_tor=False, headless=False):
     
     # Sort URLs by email likelihood
     unique_sorted_urls = sort_urls_by_email_likelihood(filtered_urls)
-    logging.info(f"Total URLs to visit after filtering and sorting: {len(unique_sorted_urls)}")
+    total_urls = min(len(unique_sorted_urls), max_pages)
+    logging.info(f"Total URLs to visit after filtering and sorting for job {job_id}: {total_urls}")
+    
+    # Update initial progress with total_urls
+    write_progress(job_id, step_id, base_url, max_pages, use_tor, headless, status="running", current_row=0, total_rows=total_urls)
     
     try:
-        for url in unique_sorted_urls:
+        for i, url in enumerate(unique_sorted_urls[:max_pages], 1):
+            if check_stop_signal(step_id):
+                logging.info(f"Stop signal detected for job {job_id}")
+                write_progress(job_id, step_id, base_url, max_pages, use_tor, headless, status="stopped", stop_call=True, current_row=i-1, total_rows=total_urls)
+                break
+            
             scrape_page(driver, url, max_pages, visited_urls, all_emails)
+            logging.info(f"Scraped page {i}/{total_urls} for job {job_id}: {url}")
+
+            # Update progress after each page
+            write_progress(job_id, step_id, base_url, max_pages, use_tor, headless, status="running", current_row=i, total_rows=total_urls)
         
-        logging.info(f"Finished scraping. Total unique emails found: {len(all_emails)}")
-        logging.info(f"{all_emails}")
+        if not check_stop_signal(step_id):
+            # Update progress to completed if not stopped
+            write_progress(job_id, step_id, base_url, max_pages, use_tor, headless, status="completed", total_rows=total_urls)
+        
+        logging.info(f"Finished scraping for job {job_id}. Total unique emails found: {len(all_emails)}")
+        logging.info(f"Emails: {all_emails}")
+        return list(all_emails)
+    
+    except Exception as e:
+        logging.error(f"Scraping failed for job {job_id}: {e}")
+        write_progress(job_id, step_id, base_url, max_pages, use_tor, headless, status="failed", error_message=str(e), total_rows=total_urls)
         return list(all_emails)
     
     finally:
-        logging.info("Closing WebDriver...")
+        logging.info(f"Closing WebDriver for job {job_id}...")
         driver.quit()

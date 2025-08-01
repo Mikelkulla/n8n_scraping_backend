@@ -2,6 +2,8 @@ import os
 import platform
 
 class Config:
+    GOOGLE_API_KEY = 'AIzaSyDQNxV1M9fAvkLjP1qb_gIssxnfO-CpLHA'
+
     BASE_DIR = os.path.abspath(os.path.dirname(__file__))
     ROOT_DIR = os.path.abspath(os.path.join(BASE_DIR, "..")) # , ".."
     
