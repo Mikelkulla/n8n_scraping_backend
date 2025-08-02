@@ -127,7 +127,7 @@ def google_maps_scrape():
         step_id = "google_maps_scrape"
 
         # Initialize progress in database
-        write_progress(job_id, step_id, input=location, max_pages=None, use_tor=None, headless=None, status="running", current_row=None, total_rows=max_places)
+        write_progress(job_id, step_id, input=f"{place_type}:{location}", max_pages=None, use_tor=None, headless=None, status="running", current_row=None, total_rows=max_places)
 
         # Start Google Maps scraping in a separate thread
         def scrape_task():
@@ -145,7 +145,7 @@ def google_maps_scrape():
                 logging.info(f"Google Maps scrape job {job_id} completed. Found {len(leads)} leads.")
             except Exception as e:
                 logging.error(f"Google Maps scrape job {job_id} failed: {e}")
-                write_progress(job_id, step_id, input=location, max_pages=None, use_tor=None, headless=None, status="failed", stop_call=True, error_message=str(e), current_row=None, total_rows=max_places)
+                write_progress(job_id, step_id, input=f"{place_type}:{location}", max_pages=None, use_tor=None, headless=None, status="failed", stop_call=True, error_message=str(e), current_row=None, total_rows=max_places)
             finally:
                 active_jobs.pop(job_id, None)
 
@@ -156,7 +156,7 @@ def google_maps_scrape():
         logging.error(f"Error starting Google Maps scrape job: {e}")
         job_id = job_id if 'job_id' in locals() else str(uuid.uuid4())
         step_id = "google_maps_scrape"
-        write_progress(job_id, step_id, input=location if 'location' in locals() else "unknown", max_pages=None, use_tor=None, headless=None, status="failed", stop_call=True, error_message=str(e), current_row=None, total_rows=None)
+        write_progress(job_id, step_id, input=f"{place_type}:{location}" if 'location' in locals() and place_type in locals() else "unknown", max_pages=None, use_tor=None, headless=None, status="failed", stop_call=True, error_message=str(e), current_row=None, total_rows=None)
         return jsonify({"error": str(e)}), 500
 
 @api_bp.route("/progress/<job_id>", methods=["GET"])

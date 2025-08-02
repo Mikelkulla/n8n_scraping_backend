@@ -1,8 +1,12 @@
 import os
 import platform
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 class Config:
-    GOOGLE_API_KEY = 'AIzaSyDQNxV1M9fAvkLjP1qb_gIssxnfO-CpLHA'
+    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", None)
 
     BASE_DIR = os.path.abspath(os.path.dirname(__file__))
     ROOT_DIR = os.path.abspath(os.path.join(BASE_DIR, "..")) # , ".."
