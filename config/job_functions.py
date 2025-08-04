@@ -43,16 +43,16 @@ def write_progress(job_id, step_id, input, max_pages, use_tor, headless, status=
         logging.error(f"Failed to write progress for job {job_id} ({step_id}): {e}")
 
 
-def update_job_status(step, job_id, status):
+def update_job_status(step_id, job_id, status):
     """
-    Updates the status of a job in the jobs_stepX.json file.
+    Updates the status of a job in the jobs_{step_id}.json file.
     
     Parameters:
-        step (int): Step number (5, 6, or 7).
+        step_id (int): Step number (5, 6, or 7).
         job_id (str): UUID of the job.
         status (str): New status ('running', 'completed', or 'stopped').
     """
-    jobs_file = os.path.join(Config.TEMP_PATH, f"jobs_{step}.json")
+    jobs_file = os.path.join(Config.TEMP_PATH, f"jobs_{step_id}.json")
     try:
         os.makedirs(Config.TEMP_PATH, exist_ok=True)
         if os.path.exists(jobs_file):
@@ -60,14 +60,20 @@ def update_job_status(step, job_id, status):
                 jobs = json.load(f)
         else:
             jobs = []
+        job_updated = False
         for job in jobs:
             if job["job_id"] == job_id:
                 job["status"] = status
+                job_updated = True
                 break
+        if not job_updated:
+            # Optionally add new job if it doesn't exist
+            jobs.append({'step_id': step_id, "job_id": job_id, "status": status})
+        # Write back to file
         with open(jobs_file, "w") as f:
             json.dump(jobs, f, indent=2)
     except Exception as e:
-        print(f"Error updating job status for step {step}, job {job_id}: {e}")
+        print(f"Error updating job status for step {step_id}, job {job_id}: {e}")
 
 def check_stop_signal(step_id):
     """
