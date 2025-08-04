@@ -52,3 +52,80 @@ def load_csv(input_csv, output_csv, required_columns=None):
         print(f"Error loading CSV: {e}")
         return None, None
     
+# FUNCTION TO EXTRACT BASE URL
+from urllib.parse import urlparse
+def is_non_business_domain(domain):
+    """
+    Check if the domain is a common non-business website.
+    
+    Args:
+        domain (str): Domain to check (e.g., 'facebook.com')
+    
+    Returns:
+        bool: True if domain is a non-business website, False otherwise
+    """
+    non_business_domains = [
+        'airbnb.co.uk',
+        'airbnb.co.za',
+        'airbnb.com',
+        'airbnb.mx',
+        'airbnb.net',
+        'airbnbmail.com',
+        'booking.com',
+        'facebook.com',
+        'instagram.com',
+        'jscache.com',
+        'linkedin.com',
+        'muscache.com',
+        'pinterest.com',
+        'snapchat.com',
+        'tacdn.com',
+        'tamgrt.com',
+        'tiktok.com',
+        'tripadvisor.cn',
+        'tripadvisor.co.uk',
+        'tripadvisor.com',
+        'tripadvisor.de',
+        'twitter.com',
+        'x.com',
+        'youtube.com',
+    ]
+    # Check if domain or any subdomain matches non-business domains
+    domain = domain.lower()
+    for non_business in non_business_domains:
+        if domain == non_business or domain.endswith('.' + non_business):
+            return True
+    return False
+
+def extract_base_url(url):
+    """
+    Extract the base URL (e.g., https://www.domain.com) from an email address or URL,
+    removing paths and parameters.
+    
+    Args:
+        email_or_url (str): Email address (e.g., 'user@sub.example.com') or URL
+                           (e.g., 'https://www.example.com/contact?param=1')
+    
+    Returns:
+        str: Base URL (e.g., 'https://www.example.com') or None if invalid
+    """
+    try:
+        # Add scheme if missing
+        if not url.startswith(('http://', 'https://')):
+            url = 'https://' + url
+        # Parse URL and extract scheme and netloc
+        parsed = urlparse(url)
+        domain = parsed.netloc
+        # Check if domain is a non-business website
+        if is_non_business_domain(domain):
+            logging.info("Not a business domain.")
+            return None
+        base_url = f'{parsed.scheme}://{parsed.netloc}'
+        
+        # Ensure lowercase for consistency
+        return base_url.lower()
+    except Exception as e:
+        logging.info(f'Error: {e}')
+        return None
+
+print(extract_base_url('https://www.wyndhamhotels.com/laquinta/new-york-city-new-york/la-quinta-new-york-city-central-park/overview?CID=LC:6ysy27krtpcrqev:52979&iata=00093796'))

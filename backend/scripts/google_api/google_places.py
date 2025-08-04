@@ -7,6 +7,8 @@ from backend.config import Config
 from backend.database import insert_lead, update_lead
 import logging
 
+from config.utils import extract_base_url
+
 def location_to_latlng(location):
     """
     Convert a location name to latitude and longitude using Nominatim.
@@ -234,7 +236,9 @@ def call_google_places_api(job_id, location, radius=300, place_type="lodging", m
                 if not place_id:
                     logging.warning(f"Skipping place with missing place_id in {location}")
                     continue
-
+                # Parsing and filtering website
+                website = extract_base_url(place.get("websiteUri"))
+                
                 lead_data = {
                     "job_id": job_id,
                     "place_id": place_id,
@@ -242,7 +246,7 @@ def call_google_places_api(job_id, location, radius=300, place_type="lodging", m
                     "name": place.get("displayName", {}).get("text"),
                     "address": place.get("formattedAddress"),
                     "phone": place.get("internationalPhoneNumber"),
-                    "website": place.get("websiteUri")
+                    "website": website
                 }
                 logging.info(f"Lead Data: {lead_data}")
                 results.append(lead_data)
