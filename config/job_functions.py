@@ -1,12 +1,14 @@
 import os
 import json
 import logging
+import time
 from backend.config import Config
 from backend.database import insert_job_execution
 
 from backend.database import insert_job_execution, update_job_execution, get_job_execution
 
-def write_progress(job_id, step_id, input, max_pages, use_tor, headless, status=None, stop_call=False, current_row=None, total_rows=None):
+# Modifying the job processes in the Database. (New Logic)
+def write_progress(job_id, step_id, input, max_pages=None, use_tor=None, headless=None, status=None, stop_call=False, current_row=None, total_rows=None):
     """
     Write processing progress to the SQLite database for a specific step and job.
 
@@ -36,13 +38,13 @@ def write_progress(job_id, step_id, input, max_pages, use_tor, headless, status=
         else:
             # Insert a new record with all fields
             insert_job_execution(job_id, step_id, input, max_pages, use_tor, headless, status, stop_call, None, current_row, total_rows)
-        
+
         update_job_status(step_id, job_id, status)
         logging.info(f"Progress updated for job {job_id} ({step_id}): input {input}, row {current_row}/{total_rows}, status: {status}")
     except Exception as e:
         logging.error(f"Failed to write progress for job {job_id} ({step_id}): {e}")
 
-
+# This function is for JSON files tracking (Old logic to be deprecated)
 def update_job_status(step_id, job_id, status):
     """
     Updates the status of a job in the jobs_{step_id}.json file.

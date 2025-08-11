@@ -7,6 +7,7 @@ from backend.config import Config
 from backend.database import insert_lead, update_lead
 import logging
 
+from config.job_functions import write_progress
 from config.utils import extract_base_url
 
 def location_to_latlng(location):
@@ -169,7 +170,7 @@ def call_google_places_api_near_search(job_id, location, radius=300, place_type=
         if conn:
             conn.close()
 
-def call_google_places_api(job_id, location, radius=300, place_type="lodging", max_places=20):
+def call_google_places_api(job_id, step_id, location, radius=300, place_type="lodging", max_places=20):
     """
     Fetch places from Google Places Text Search (New) API and store results in the leads table.
 
@@ -212,7 +213,7 @@ def call_google_places_api(job_id, location, radius=300, place_type="lodging", m
         results = []
         count = 0
         next_page_token = None
-
+        total_rows = 0
         while count < max_places:
             body = {
                 "textQuery": text_query,
@@ -228,7 +229,7 @@ def call_google_places_api(job_id, location, radius=300, place_type="lodging", m
             data = response.json()
             places = data.get("places", [])
             logging.info(f"Found {len(places)} places for query: {text_query}")
-
+            total_rows += len(places)
             for place in places:
                 if count >= max_places:
                     break
@@ -284,6 +285,7 @@ def call_google_places_api(job_id, location, radius=300, place_type="lodging", m
                         website=lead_data["website"]
                     )
                     logging.info(f"Stored lead for place {lead_data['name']} (job_id: {job_id})")
+                write_progress(job_id, step_id, input=f"{place_type}:{location}", current_row=count + 1, total_rows=total_rows)
                 count += 1
 
             next_page_token = data.get("nextPageToken")

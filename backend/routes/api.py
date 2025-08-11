@@ -127,36 +127,37 @@ def google_maps_scrape():
         step_id = "google_maps_scrape"
 
         # Initialize progress in database
-        write_progress(job_id, step_id, input=f"{place_type}:{location}", max_pages=None, use_tor=None, headless=None, status="running", current_row=None, total_rows=max_places)
+        write_progress(job_id, step_id, input=f"{place_type}:{location}", status="running", total_rows=max_places)
 
         # Start Google Maps scraping in a separate thread
-        def scrape_task():
+        def scrape_task(max_places):
             try:
                 logging.info(f"Starting Google Maps scrape job {job_id} for location: {location}")
-                leads = call_google_places_api(job_id, location, radius, place_type, max_places)
+                leads = call_google_places_api(job_id, step_id, location, radius, place_type, max_places)
 
                 # Save results to a file
-                result_file = os.path.join(Config.TEMP_PATH, f"results_{job_id}.json")
+                result_file = os.path.join(Config.TEMP_PATH, f"results_{step_id}_{job_id}.json")
                 os.makedirs(Config.TEMP_PATH, exist_ok=True)
                 with open(result_file, "w") as f:
-                    json.dump({"job_id": job_id, "input": location, "leads": leads}, f, indent=2)
+                    json.dump({"job_id": job_id, "input": f"{place_type}:{location}", "leads": leads}, f, indent=2)
 
-                # write_progress(job_id, step_id, input=location, max_pages=None, use_tor=None, headless=None, status="completed", current_row=len(leads), total_rows=max_places)
+                max_places = min(len(leads), max_places)
+                write_progress(job_id, step_id, input=None, status="completed", total_rows=max_places)
                 logging.info(f"Google Maps scrape job {job_id} completed. Found {len(leads)} leads.")
             except Exception as e:
                 logging.error(f"Google Maps scrape job {job_id} failed: {e}")
-                write_progress(job_id, step_id, input=f"{place_type}:{location}", max_pages=None, use_tor=None, headless=None, status="failed", stop_call=True, error_message=str(e), current_row=None, total_rows=max_places)
+                write_progress(job_id, step_id, input=f"{place_type}:{location}", status="failed", stop_call=True, error_message=str(e))
             finally:
                 active_jobs.pop(job_id, None)
 
-        start_job_thread(job_id, step_id, scrape_task)
+        start_job_thread(job_id, step_id, scrape_task(max_places))
         return jsonify({"job_id": job_id, "status": "started", "input": location}), 202
 
     except Exception as e:
         logging.error(f"Error starting Google Maps scrape job: {e}")
         job_id = job_id if 'job_id' in locals() else str(uuid.uuid4())
         step_id = "google_maps_scrape"
-        write_progress(job_id, step_id, input=f"{place_type}:{location}" if 'location' in locals() and place_type in locals() else "unknown", max_pages=None, use_tor=None, headless=None, status="failed", stop_call=True, error_message=str(e), current_row=None, total_rows=None)
+        write_progress(job_id, step_id, input=f"{place_type}:{location}" if 'location' in locals() and place_type in locals() else "unknown", status="failed", stop_call=True, error_message=str(e))
         return jsonify({"error": str(e)}), 500
 
 @api_bp.route("/progress/<job_id>", methods=["GET"])
