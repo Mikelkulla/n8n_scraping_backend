@@ -72,12 +72,29 @@ def start_scrape():
                 logging.info(f"Starting scrape job {job_id} for URL: {url}")
                 emails = scrape_emails(job_id, step_id, url, max_pages=max_pages, use_tor=use_tor, headless=headless)
 
-                # Save results to a file
-                result_file = os.path.join(Config.TEMP_PATH, f"results_{job_id}.json")
-                os.makedirs(Config.TEMP_PATH, exist_ok=True)
-                with open(result_file, "w") as f:
-                    json.dump({"job_id": job_id, "input": url, "emails": emails}, f, indent=2)
+                # Prepare the result dictionary
+                result = {"job_id": job_id, "input": url, "emails": emails}
 
+                # Save results to a file
+                result_file = os.path.join(Config.TEMP_PATH, f"results_{step_id}.json")
+                os.makedirs(Config.TEMP_PATH, exist_ok=True)
+                
+                # Read existing results, append new result, and write back
+                try:
+                    # Try to read existing data
+                    with open(result_file, "r") as f:
+                        data = json.load(f)
+                        if not isinstance(data, list):
+                            data = [data]  # Convert to list if it's a single dict
+                except (FileNotFoundError, json.JSONDecodeError):
+                    data = []  # Initialize as empty list if file doesn't exist or is empty
+
+                # Append new result
+                data.append(result)
+
+                # Write the updated list back to the file
+                with open(result_file, "w") as f:
+                    json.dump(data, f, indent=2)
                 logging.info(f"Scrape job {job_id} completed. Found {len(emails)} emails.")
             except Exception as e:
                 logging.error(f"Scrape job {job_id} failed: {e}")
