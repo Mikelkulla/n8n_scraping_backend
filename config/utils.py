@@ -127,5 +127,3 @@ def extract_base_url(url):
     except Exception as e:
         logging.info(f'Error: {e}')
         return None
-
-print(extract_base_url('https://www.wyndhamhotels.com/laquinta/new-york-city-new-york/la-quinta-new-york-city-central-park/overview?CID=LC:6ysy27krtpcrqev:52979&iata=00093796'))
