@@ -150,6 +150,25 @@ def get_job_execution(job_id, step_id):
     finally:
         conn.close()
 
+def get_leads():
+    """
+    Retrieve all leads from the leads table. (Where website is not null)
+    Returns:
+        List of dictionaries containing lead records, or empty list if none found or on error.
+    """
+    conn = sqlite3.connect(os.path.join(Config.TEMP_PATH, "scraping.db"))
+    conn.row_factory = sqlite3.Row
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM leads WHERE website IS NOT NULL")
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows] if rows else []
+    except sqlite3.Error as e:
+        logging.error(f"Failed to fetch leads: {e}")
+        return []
+    finally:
+        conn.close()
+
 def insert_lead(conn, job_id, place_id, location=None, name=None, address=None, phone=None, website=None, emails=None):
     """
     Insert or replace a lead record in the leads table.
@@ -177,7 +196,7 @@ def insert_lead(conn, job_id, place_id, location=None, name=None, address=None, 
     except sqlite3.Error as e:
         logging.error(f"Failed to insert/update lead for job {job_id}, place {place_id}: {e}")
 
-def update_lead(conn, job_id, place_id, location=None, name=None, address=None, phone=None, website=None, emails=None):
+def update_lead(conn, job_id, place_id, location=None, name=None, address=None, phone=None, website=None, emails=None, status=None):
     """
     Update specific fields in a lead record identified by job_id and place_id.
 
@@ -214,7 +233,10 @@ def update_lead(conn, job_id, place_id, location=None, name=None, address=None, 
         if emails is not None:
             set_clauses.append("emails = ?")
             params.append(emails)
-        set_clauses.append("created_at = CURRENT_TIMESTAMP")
+        if status is not None:
+            set_clauses.append("status = ?")
+            params.append(status)
+        set_clauses.append("updated_at = CURRENT_TIMESTAMP")
 
         if not set_clauses:
             logging.warning(f"No fields to update for lead with job {job_id}, place {place_id}")
@@ -234,4 +256,5 @@ def update_lead(conn, job_id, place_id, location=None, name=None, address=None, 
         logging.error(f"Failed to update lead for job {job_id}, place {place_id}: {e}")
 
 if __name__ == "__main__":
-    init_db()
+    # init_db()
+    print(get_leads()[300])
