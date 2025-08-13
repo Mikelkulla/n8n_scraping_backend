@@ -4,31 +4,35 @@ from config.logging import setup_logging
 import logging
 
 EMAIL_REGEX = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
+EXAMPLE_DOMAINS = {"example.com", "example.org", "example.net", "test.com", "sample.com"}
 
 def extract_emails_from_text(text):
     """
-    Extract email addresses from a given text string using regex.
+    Extract email addresses from a given text string using regex, excluding example domains.
     
     Args:
         text (str): Text to search for email addresses.
     
     Returns:
-        set: Set of unique email addresses found.
+        set: Set of unique email addresses found, excluding example domains.
     """
     emails = set(EMAIL_REGEX.findall(text))
-    logging.info(f"Extracted emails from text: {emails}")
-    return emails
+    # Filter out example domains
+    filtered_emails = {email for email in emails if not any(email.lower().endswith("@" + domain) for domain in EXAMPLE_DOMAINS)}
+    logging.info(f"Extracted emails from text: {filtered_emails}")
+    return filtered_emails
 
 def extract_emails_from_page(driver, url):
     """
-    Extract email addresses from a webpage, including visible text and mailto links.
+    Extract email addresses from a webpage, including visible text and mailto links,
+    excluding example domains.
     
     Args:
         driver (WebDriver): Selenium WebDriver instance.
         url (str): URL of the page to scrape.
     
     Returns:
-        set: Set of unique email addresses found on the page.
+        set: Set of unique email addresses found on the page, excluding example domains.
     """
     logging.info(f"Scraping page for emails: {url}")
     emails = set()
@@ -52,7 +56,9 @@ def extract_emails_from_page(driver, url):
                 if href:
                     email = href.replace("mailto:", "").split("?")[0]
                     if EMAIL_REGEX.fullmatch(email):
-                        emails.add(email)
+                        # Only add if not an example domain
+                        if not any(email.lower().endswith("@" + domain) for domain in EXAMPLE_DOMAINS):
+                            emails.add(email)
         except Exception as e:
             logging.error(f"Error extracting mailto links: {e}")
         
