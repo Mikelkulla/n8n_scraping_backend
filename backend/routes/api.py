@@ -1,10 +1,11 @@
+import re
+import sqlite3
 import time
 from flask import Blueprint, jsonify, request
 import os
 import json
 import threading
 import uuid
-import re
 import requests
 from backend.config import Config
 from backend.scripts.scraping.scrape_for_email import scrape_emails
@@ -12,7 +13,7 @@ from config.job_functions import write_progress, check_stop_signal
 from backend.scripts.google_api.google_places import call_google_places_api
 from backend.database import get_job_execution, get_leads, update_lead
 import logging
-import sqlite3
+from config.utils import validate_emails, validate_url, poll_job_progress, read_job_results
 
 api_bp = Blueprint("api", __name__)
 
@@ -51,13 +52,9 @@ def start_scrape():
         if not data or "url" not in data:
             return jsonify({"error": "Missing 'url' in request body"}), 400
 
-        url = data["url"]
-        # Validate URL format
-        if not re.match(r"^https?://[\w\-]+(\.[\w\-]+)+[/\w\-]*$", url):
-            if not url.startswith(("http://", "https://")):
-                url = f"https://{url}"
-            else:
-                return jsonify({"error": "Invalid URL format"}), 400
+        url, error = validate_url(data["url"])
+        if error:
+            return jsonify({"error": error}), 400
 
         max_pages = data.get("max_pages")  # Allow None
         use_tor = data.get("use_tor")  # Allow None
@@ -333,7 +330,7 @@ def scrape_leads_emails():
 
         # Initialize results
         results = []
-        base_url = "http://localhost:5000/api"  # Adjust if your API runs elsewhere
+        base_url = os.getenv("BASE_URL")  # Adjust if your API runs elsewhere
 
         for lead in leads:
             website = lead.get("website")
@@ -346,6 +343,20 @@ def scrape_leads_emails():
                     "status": "skipped",
                     "emails": [],
                     "error": "No website provided"
+                })
+                continue
+
+            # Validate and normalize website URL
+            website, error = validate_url(website)
+            if error:
+                logging.error(f"Invalid website URL for lead {lead.get('lead_id', 'unknown')}: {error}")
+                results.append({
+                    "lead_id": lead.get("lead_id", "unknown"),
+                    "website": website,
+                    "job_id": None,
+                    "status": "failed",
+                    "emails": [],
+                    "error": error
                 })
                 continue
 
@@ -374,132 +385,65 @@ def scrape_leads_emails():
                 job_id = job_data["job_id"]
                 logging.info(f"Started scrape job {job_id} for {website}")
 
-                # Poll progress until job completes with retries
-                max_retries = 12  # Number of retries for progress check
-                retry_delay = 5  # Seconds between retries
-                for attempt in range(max_retries):
-                    try:
-                        progress_response = requests.get(f"{base_url}/progress/{job_id}")
-                        if progress_response.status_code == 200:
-                            progress = progress_response.json()
-                            break  # Success, exit retry loop
-                        else:
-                            logging.warning(f"Attempt {attempt + 1}/{max_retries} failed for job {job_id}: {progress_response.json()}")
-                            if attempt < max_retries - 1:
-                                time.sleep(retry_delay)
-                            continue
-                    except requests.RequestException as e:
-                        logging.warning(f"Attempt {attempt + 1}/{max_retries} failed for job {job_id}: {e}")
-                        if attempt < max_retries - 1:
-                            time.sleep(retry_delay)
-                            continue
-                else:
-                    # All retries failed
-                    logging.error(f"Failed to fetch progress for job {job_id} after {max_retries} attempts")
+                # Poll job progress
+                progress_result = poll_job_progress(base_url, job_id)
+                status = progress_result["status"]
+                error = progress_result["error"]
+
+                if status != "completed":
                     results.append({
                         "lead_id": lead.get("lead_id", "unknown"),
                         "website": website,
                         "job_id": job_id,
-                        "status": "failed",
+                        "status": status,
                         "emails": [],
-                        "error": f"Progress check failed after {max_retries} attempts"
+                        "error": error or "Job did not complete successfully"
                     })
                     continue
 
-                # Poll progress until job completes
-                while True:
-                    progress_response = requests.get(f"{base_url}/progress/{job_id}")
-                    if progress_response.status_code != 200:
-                        logging.error(f"Failed to fetch progress for job {job_id}: {progress_response.json()}")
-                        results.append({
-                            "lead_id": lead.get("lead_id", "unknown"),
-                            "website": website,
-                            "job_id": job_id,
-                            "status": "failed",
-                            "emails": [],
-                            "error": f"Progress check failed: {progress_response.json().get('error')}"
-                        })
-                        break
+                # Read job results
+                result_file = os.path.join(Config.TEMP_PATH, "results_email_scrape.json")
+                job_result = read_job_results(result_file, job_id)
+                emails = job_result["emails"]
+                if job_result["error"]:
+                    results.append({
+                        "lead_id": lead.get("lead_id", "unknown"),
+                        "website": website,
+                        "job_id": job_id,
+                        "status": status,
+                        "emails": [],
+                        "error": job_result["error"]
+                    })
+                    continue
+                # Validate emails
+                emails = validate_emails(emails)
 
-                    progress = progress_response.json()
-                    status = progress["status"]
-                    if status in ["completed", "failed", "stopped"]:
-                        if status == "completed":
-                            # Read emails from single results file with retries
-                            result_file = os.path.join(Config.TEMP_PATH, "results_email_scrape.json")
-                            emails = []
-                            max_file_retries = 3  # Retry reading the file
-                            file_retry_delay = 1  # Seconds between retries
-                            for attempt in range(max_file_retries):
-                                try:
-                                    with open(result_file, "r") as f:
-                                        job_results = json.load(f)
-                                        if not isinstance(job_results, list):
-                                            job_results = [job_results]
-                                        for job_result in job_results:
-                                            if job_result.get("job_id") == job_id:
-                                                emails = job_result.get("emails", [])
-                                                break
-                                        else:
-                                            raise ValueError(f"Job ID {job_id} not found in result file")
-                                    break  # Success, exit retry loop
-                                except (FileNotFoundError, json.JSONDecodeError, ValueError) as e:
-                                    logging.warning(f"Attempt {attempt + 1}/{max_file_retries} failed reading results file for job {job_id}: {e}")
-                                    if attempt < max_file_retries - 1:
-                                        time.sleep(file_retry_delay)
-                                    continue
-                            else:
-                                # All retries failed
-                                logging.error(f"Failed to read results file for job {job_id} after {max_file_retries} attempts")
-                                results.append({
-                                    "lead_id": lead.get("lead_id", "unknown"),
-                                    "website": website,
-                                    "job_id": job_id,
-                                    "status": status,
-                                    "emails": [],
-                                    "error": f"Failed to read results file after {max_file_retries} attempts"
-                                })
-                                continue
-                            # Validate emails
-                            emails = [email for email in emails if re.match(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$", email)]
-
-                            # Update the database with the emails
-                            conn = sqlite3.connect(os.path.join(Config.TEMP_PATH, "scraping.db"))
-                            try:
-                                emails_str = ','.join(emails) if emails else None  # Convert to string or None
-                                update_lead(conn, job_id=lead['job_id'], place_id=lead['place_id'], emails=emails_str, status='scraped')
-                                logging.info(f"Updated emails in DB for lead {lead['lead_id']} (place_id: {lead['place_id']})")
-                                results.append({
-                                    "lead_id": lead.get("lead_id", "unknown"),
-                                    "website": website,
-                                    "job_id": job_id,
-                                    "status": status,
-                                    "emails": emails,
-                                    "error": None if emails else "No valid emails found"
-                                })
-                            except Exception as db_err:
-                                logging.error(f"Failed to update DB for lead {lead['lead_id']}: {db_err}")
-                                results.append({
-                                    "lead_id": lead.get("lead_id", "unknown"),
-                                    "website": website,
-                                    "job_id": job_id,
-                                    "status": status,
-                                    "emails": emails,
-                                    "error": f"Database update failed: {str(db_err)}"
-                                })
-                            finally:
-                                conn.close()
-                        else:
-                            results.append({
-                                "lead_id": lead.get("lead_id", "unknown"),
-                                "website": website,
-                                "job_id": job_id,
-                                "status": status,
-                                "emails": [],
-                                "error": progress.get("error_message", "Job did not complete successfully")
-                            })
-                        break
-                    time.sleep(3)  # Wait 3 seconds before polling again
+                # Update the database with the emails
+                conn = sqlite3.connect(os.path.join(Config.TEMP_PATH, "scraping.db"))
+                try:
+                    emails_str = ','.join(emails) if emails else None  # Convert to string or None
+                    update_lead(conn, job_id=lead['job_id'], place_id=lead['place_id'], emails=emails_str, status='scraped')
+                    logging.info(f"Updated emails in DB for lead {lead['lead_id']} (place_id: {lead['place_id']})")
+                    results.append({
+                        "lead_id": lead.get("lead_id", "unknown"),
+                        "website": website,
+                        "job_id": job_id,
+                        "status": status,
+                        "emails": emails,
+                        "error": None if emails else "No valid emails found"
+                    })
+                except Exception as db_err:
+                    logging.error(f"Failed to update DB for lead {lead['lead_id']}: {db_err}")
+                    results.append({
+                        "lead_id": lead.get("lead_id", "unknown"),
+                        "website": website,
+                        "job_id": job_id,
+                        "status": status,
+                        "emails": emails,
+                        "error": f"Database update failed: {str(db_err)}"
+                    })
+                finally:
+                    conn.close()
 
             except requests.RequestException as e:
                 logging.error(f"Error initiating scrape job for {website}: {e}")

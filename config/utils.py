@@ -1,7 +1,14 @@
 # config/utils.py
+import time
 import pandas as pd
 import os
 import logging
+import re
+import requests
+import json
+import time
+from urllib.parse import urlparse
+
 
 def load_csv(input_csv, output_csv, required_columns=None):
     """
@@ -52,8 +59,7 @@ def load_csv(input_csv, output_csv, required_columns=None):
         print(f"Error loading CSV: {e}")
         return None, None
     
-# FUNCTION TO EXTRACT BASE URL
-from urllib.parse import urlparse
+
 def is_non_business_domain(domain):
     """
     Check if the domain is a common non-business website.
@@ -65,30 +71,11 @@ def is_non_business_domain(domain):
         bool: True if domain is a non-business website, False otherwise
     """
     non_business_domains = [
-        'airbnb.co.uk',
-        'airbnb.co.za',
-        'airbnb.com',
-        'airbnb.mx',
-        'airbnb.net',
-        'airbnbmail.com',
-        'booking.com',
-        'facebook.com',
-        'instagram.com',
-        'jscache.com',
-        'linkedin.com',
-        'muscache.com',
-        'pinterest.com',
-        'snapchat.com',
-        'tacdn.com',
-        'tamgrt.com',
-        'tiktok.com',
-        'tripadvisor.cn',
-        'tripadvisor.co.uk',
-        'tripadvisor.com',
-        'tripadvisor.de',
-        'twitter.com',
-        'x.com',
-        'youtube.com',
+        'airbnb.co.uk', 'airbnb.co.za', 'airbnb.com', 'airbnb.mx', 'airbnb.net',
+        'airbnbmail.com', 'booking.com', 'facebook.com', 'instagram.com', 'jscache.com',
+        'linkedin.com', 'muscache.com', 'pinterest.com', 'snapchat.com', 'tacdn.com',
+        'tamgrt.com', 'tiktok.com', 'tripadvisor.cn', 'tripadvisor.co.uk',
+        'tripadvisor.com', 'tripadvisor.de', 'twitter.com', 'x.com', 'youtube.com'
     ]
     # Check if domain or any subdomain matches non-business domains
     domain = domain.lower()
@@ -127,3 +114,133 @@ def extract_base_url(url):
     except Exception as e:
         logging.info(f'Error: {e}')
         return None
+
+def validate_url(url):
+    """
+    Validate a URL and normalize it by adding https:// if no scheme is provided.
+    
+    Args:
+        url (str): URL to validate.
+    
+    Returns:
+        tuple: (str, str) - (Normalized URL, error message if invalid, else None)
+    """
+    try:
+        # Validate URL format
+        if not re.match(r"^https?://[\w\-]+(\.[\w\-]+)+[/\w\-]*$", url):
+            if not url.startswith(("http://", "https://")):
+                url = f"https://{url}"
+                if not re.match(r"^https?://[\w\-]+(\.[\w\-]+)+[/\w\-]*$", url):
+                    return None, "Invalid URL format"
+            else:
+                return None, "Invalid URL format"
+        return url, None
+    except Exception as e:
+        logging.error(f"Error validating URL {url}: {e}")
+        return None, f"Error validating URL: {str(e)}"
+
+def poll_job_progress(base_url, job_id, max_retries=12, retry_delay=5):
+    """
+    Poll the progress of a job until it completes, fails, or is stopped.
+    
+    Args:
+        base_url (str): Base URL of the API (e.g., 'http://localhost:5000/api').
+        job_id (str): Unique job ID to track.
+        max_retries (int): Maximum number of retries for progress checks.
+        retry_delay (int): Seconds to wait between retries.
+    
+    Returns:
+        dict: Progress data with status, emails (if completed), and error (if any).
+    """
+    for attempt in range(max_retries):
+        try:
+            progress_response = requests.get(f"{base_url}/progress/{job_id}")
+            if progress_response.status_code == 200:
+                progress = progress_response.json()
+                status = progress.get("status")
+                if status in ["completed", "failed", "stopped"]:
+                    return {
+                        "status": status,
+                        "progress": progress,
+                        "emails": [],
+                        "error": progress.get("error_message") if status != "completed" else None
+                    }
+                logging.info(f"Attempt {attempt + 1}/{max_retries} succeded for job {job_id}: {progress_response.json()}")
+                time.sleep(3)  # Wait before polling again
+            else:
+                logging.warning(f"Attempt {attempt + 1}/{max_retries} failed for job {job_id}: {progress_response.json()}")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+        except requests.RequestException as e:
+            logging.warning(f"Attempt {attempt + 1}/{max_retries} failed for job {job_id}: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+    return {
+        "status": "failed",
+        "progress": None,
+        "emails": [],
+        "error": f"Progress check failed after {max_retries} attempts"
+    }
+
+def read_job_results(result_file, job_id, max_retries=3, retry_delay=2):
+    """
+    Read job results from a JSON file, retrying if necessary.
+    
+    Args:
+        result_file (str): Path to the JSON results file.
+        job_id (str): Unique job ID to find results for.
+        max_retries (int): Maximum number of retries for reading the file.
+        retry_delay (int): Seconds to wait between retries.
+    
+    Returns:
+        dict: Results containing emails and error (if any).
+    """
+    for attempt in range(max_retries):
+        try:
+            with open(result_file, "r") as f:
+                job_results = json.load(f)
+                if not isinstance(job_results, list):
+                    job_results = [job_results]
+                for job_result in job_results:
+                    if job_result.get("job_id") == job_id:
+                        return {
+                            "emails": job_result.get("emails", []),
+                            "error": None
+                        }
+                raise ValueError(f"Job ID {job_id} not found in result file")
+        except (FileNotFoundError, json.JSONDecodeError, ValueError) as e:
+            logging.warning(f"Attempt {attempt + 1}/{max_retries} failed reading results file for job {job_id}: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+            continue
+    return {
+        "emails": [],
+        "error": f"Failed to read results file after {max_retries} attempts"
+    }
+
+def is_example_domain(email):
+    """
+    Check if an email belongs to a common example domain.
+    
+    Args:
+        email (str): Email address to check.
+    
+    Returns:
+        bool: True if email uses an example domain, False otherwise.
+    """
+    EXAMPLE_DOMAINS = {"example.com", "example.org", "example.net", "test.com", "sample.com"}
+    email = email.lower()
+    return any(email.endswith("@" + domain) for domain in EXAMPLE_DOMAINS)
+
+def validate_emails(emails):
+    """
+    Validate a list of emails and filter out invalid or example domain emails.
+    
+    Args:
+        emails (list): List of email addresses to validate.
+    
+    Returns:
+        list: Validated and filtered email addresses.
+    """
+    email_regex = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
+    return [email for email in emails if email_regex.match(email) and not is_example_domain(email)]
