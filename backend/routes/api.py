@@ -132,7 +132,7 @@ def google_maps_scrape():
 
         location = data["location"]
         # Validate location (basic check for non-empty string with letters)
-        if not isinstance(location, str) or not re.match(r"^[a-zA-Z\s,]+$", location):
+        if not isinstance(location, str): # or not re.match(r"^[a-zA-Z\s,]+$", location):
             return jsonify({"error": "Invalid location format"}), 400
 
         radius = data.get("radius", 300)
@@ -146,7 +146,7 @@ def google_maps_scrape():
         write_progress(job_id, step_id, input=f"{place_type}:{location}", status="running", total_rows=max_places)
 
         # Start Google Maps scraping in a separate thread
-        def scrape_task():
+        def scrape_task(max_places):
             try:
                 logging.info(f"Starting Google Maps scrape job {job_id} for location: {location}")
                 leads = call_google_places_api(job_id, step_id, location, radius, place_type, max_places)
@@ -166,7 +166,7 @@ def google_maps_scrape():
             finally:
                 active_jobs.pop(job_id, None)
 
-        start_job_thread(job_id, step_id, scrape_task)
+        start_job_thread(job_id, step_id, scrape_task(max_places))
         return jsonify({"job_id": job_id, "status": "started", "input": location}), 202
 
     except Exception as e:
