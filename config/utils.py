@@ -139,7 +139,7 @@ def validate_url(url):
         logging.error(f"Error validating URL {url}: {e}")
         return None, f"Error validating URL: {str(e)}"
 
-def poll_job_progress(base_url, job_id, max_retries=12, retry_delay=5):
+def poll_job_progress(base_url, job_id, max_retries=60, retry_delay=5):
     """
     Poll the progress of a job until it completes, fails, or is stopped.
     
@@ -165,7 +165,7 @@ def poll_job_progress(base_url, job_id, max_retries=12, retry_delay=5):
                         "emails": [],
                         "error": progress.get("error_message") if status != "completed" else None
                     }
-                logging.info(f"Attempt {attempt + 1}/{max_retries} succeded for job {job_id}: {progress_response.json()}")
+                logging.info(f"Status: {progress.get("status")} - Attempt {attempt + 1}/{max_retries} succeded for job {job_id}: {progress_response.json()}")
                 time.sleep(3)  # Wait before polling again
             else:
                 logging.warning(f"Attempt {attempt + 1}/{max_retries} failed for job {job_id}: {progress_response.json()}")
