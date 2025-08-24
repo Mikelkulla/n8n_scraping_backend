@@ -8,7 +8,7 @@ from backend.database import insert_job_execution
 from backend.database import insert_job_execution, update_job_execution, get_job_execution
 
 # Modifying the job processes in the Database. (New Logic)
-def write_progress(job_id, step_id, input, max_pages=None, use_tor=None, headless=None, status=None, stop_call=False, current_row=None, total_rows=None):
+def write_progress(job_id, step_id, input, max_pages=None, use_tor=None, headless=None, status=None, stop_call=False, current_row=None, total_rows=None, error_message=None):
     """
     Write processing progress to the SQLite database for a specific step and job.
 
@@ -34,10 +34,10 @@ def write_progress(job_id, step_id, input, max_pages=None, use_tor=None, headles
         # Check if a record exists for this job_id and step_id
         if get_job_execution(job_id, step_id):
             # Update only specific fields
-            update_job_execution(job_id, step_id, current_row=current_row, total_rows=total_rows, status=status, stop_call=stop_call)
+            update_job_execution(job_id, step_id, current_row=current_row, total_rows=total_rows, status=status, stop_call=stop_call, error_message=error_message)
         else:
             # Insert a new record with all fields
-            insert_job_execution(job_id, step_id, input, max_pages, use_tor, headless, status, stop_call, None, current_row, total_rows)
+            insert_job_execution(job_id, step_id, input, max_pages, use_tor, headless, status, stop_call, error_message, current_row, total_rows)
 
         update_job_status(step_id, job_id, status)
         logging.info(f"Progress updated for job {job_id} ({step_id}): input {input}, row {current_row}/{total_rows}, status: {status}")
