@@ -14,6 +14,7 @@ class Config:
     # Data and log paths
     LOG_PATH = os.path.join(BASE_DIR, "log_files")
     LOG_PREFIX = "Log_File"
+    MAX_BYTES = 100*1024*1024
     SCRIPTS_PATH = os.path.join(BASE_DIR, "scripts")
     TEMP_PATH = os.path.join(BASE_DIR, "temp")  # New temp folder
     

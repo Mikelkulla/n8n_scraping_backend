@@ -5,7 +5,7 @@ from logging.handlers import RotatingFileHandler
 from backend.config import Config
 
 
-def setup_logging(log_dir=Config.LOG_PATH, log_prefix=Config.LOG_PREFIX, max_bytes=100*1024*1024):
+def setup_logging(log_dir=Config.LOG_PATH, log_prefix=Config.LOG_PREFIX, max_bytes=Config.MAX_BYTES):
     """
     Sets up logging with a date-based log file in the specified directory.
     Rotates the log file when it exceeds max_bytes, appending a timestamp to the rotated file.
