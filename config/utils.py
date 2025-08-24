@@ -165,7 +165,7 @@ def poll_job_progress(base_url, job_id, max_retries=60, retry_delay=5):
                         "emails": [],
                         "error": progress.get("error_message") if status != "completed" else None
                     }
-                logging.info(f"Status: {progress.get("status")} - Attempt {attempt + 1}/{max_retries} succeded for job {job_id}: {progress_response.json()}")
+                logging.info(f"Status: {status} - Attempt {attempt + 1}/{max_retries} succeded for job {job_id}: {progress_response.json()}")
                 time.sleep(3)  # Wait before polling again
             else:
                 logging.warning(f"Attempt {attempt + 1}/{max_retries} failed for job {job_id}: {progress_response.json()}")
