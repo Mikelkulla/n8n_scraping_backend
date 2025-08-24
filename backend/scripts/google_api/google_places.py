@@ -291,6 +291,10 @@ def call_google_places_api(job_id, step_id, location, radius=300, place_type="lo
             next_page_token = data.get("nextPageToken")
             logging.info(f"PageToken: {next_page_token}")
             if not next_page_token or count >= max_places:
+                if not next_page_token:
+                    logging.info(f"There is no next page token!")
+                if count >= max_places:
+                    logging.info(f"count >= max_places")
                 break
             time.sleep(2)  # Wait for nextPageToken to become valid
 
