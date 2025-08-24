@@ -1,6 +1,5 @@
 import xml.etree.ElementTree as ET
 from urllib.parse import urljoin, urlparse
-from config.logging import setup_logging
 from bs4 import BeautifulSoup
 import logging
 import re

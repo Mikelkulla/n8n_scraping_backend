@@ -1,5 +1,3 @@
-from urllib.parse import urlparse
-from config.logging import setup_logging
 import logging
 
 def scrape_page(driver, url, max_pages, visited_urls, all_emails):

@@ -1,6 +1,5 @@
 import re
 from selenium.webdriver.common.by import By
-from config.logging import setup_logging
 import logging
 
 EMAIL_REGEX = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")

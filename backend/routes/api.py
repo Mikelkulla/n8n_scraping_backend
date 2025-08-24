@@ -1,6 +1,4 @@
-import re
 import sqlite3
-import time
 from flask import Blueprint, jsonify, request
 import os
 import json
@@ -9,7 +7,7 @@ import uuid
 import requests
 from backend.config import Config
 from backend.scripts.scraping.scrape_for_email import scrape_emails
-from config.job_functions import write_progress, check_stop_signal
+from config.job_functions import write_progress
 from backend.scripts.google_api.google_places import call_google_places_api
 from backend.database import get_job_execution, get_leads, update_lead
 import logging
