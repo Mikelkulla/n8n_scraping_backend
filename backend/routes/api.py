@@ -290,7 +290,7 @@ def scrape_leads_emails():
         headless = data.get("headless", True)  # Default to True
 
         # Fetch leads from the database by default
-        leads = get_leads()
+        leads = get_leads(status_filter="NOT scraped")
         # For testing only (override with hardcoded leads if TEST_MODE is set)
         if os.getenv("TEST_MODE") == "true":
             leads = [
@@ -306,7 +306,7 @@ def scrape_leads_emails():
                     'emails': None, 
                     'created_at': '2025-08-11 20:51:52', 
                     'updated_at': '2025-08-11 20:51:52', 
-                    'status': None
+                    'status': 'scraped'
                 },
                 {
                     'lead_id': 386, 

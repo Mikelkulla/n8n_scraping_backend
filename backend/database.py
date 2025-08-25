@@ -150,9 +150,14 @@ def get_job_execution(job_id, step_id):
     finally:
         conn.close()
 
-def get_leads():
+def get_leads(status_filter=None):
     """
-    Retrieve all leads from the leads table. (Where website is not null)
+    Retrieve leads from the leads table where website is not null.
+    Optionally filter out leads with status='scraped'.
+
+    Args:
+        status_filter (str, optional): Filter for status. Use "NOT scraped" to exclude scraped leads.
+
     Returns:
         List of dictionaries containing lead records, or empty list if none found or on error.
     """
@@ -160,7 +165,10 @@ def get_leads():
     conn.row_factory = sqlite3.Row
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM leads WHERE website IS NOT NULL")
+        query = "SELECT * FROM leads WHERE website IS NOT NULL"
+        if status_filter == "NOT scraped":
+            query += " AND (status IS NULL OR status != 'scraped')"
+        cursor.execute(query)
         rows = cursor.fetchall()
         return [dict(row) for row in rows] if rows else []
     except sqlite3.Error as e:
