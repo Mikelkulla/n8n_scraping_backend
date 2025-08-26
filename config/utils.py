@@ -228,7 +228,7 @@ def is_example_domain(email):
     Returns:
         bool: True if email uses an example domain, False otherwise.
     """
-    EXAMPLE_DOMAINS = {"example.com", "example.org", "example.net", "test.com", "sample.com"}
+    EXAMPLE_DOMAINS = {"example.me","example.com", "example.org", "example.net", "test.com", "sample.com"}
     email = email.lower()
     return any(email.endswith("@" + domain) for domain in EXAMPLE_DOMAINS)
 
