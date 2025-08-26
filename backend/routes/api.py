@@ -1,4 +1,3 @@
-import sqlite3
 from flask import Blueprint, jsonify, request
 import os
 import json
@@ -9,7 +8,7 @@ from backend.config import Config
 from backend.scripts.scraping.scrape_for_email import scrape_emails
 from config.job_functions import write_progress
 from backend.scripts.google_api.google_places import call_google_places_api
-from backend.database import get_job_execution, get_leads, update_lead
+from backend.database import Database
 import logging
 from config.utils import validate_emails, validate_url, poll_job_progress, read_job_results
 
@@ -186,22 +185,23 @@ def get_progress(job_id):
         JSON response with job progress details.
     """
     try:
-        # Try both possible step_ids
-        for step_id in ["email_scrape", "google_maps_scrape"]:
-            progress = get_job_execution(job_id, step_id)
-            if progress:
-                return jsonify({
-                    "job_id": job_id,
-                    "step_id": step_id,
-                    "input": progress["input"],
-                    "max_pages": progress["max_pages"],
-                    "use_tor": progress["use_tor"],
-                    "headless": progress["headless"],
-                    "current_row": progress["current_row"],
-                    "total_rows": progress["total_rows"],
-                    "status": progress["status"],
-                    "error_message": progress["error_message"]
-                }), 200
+        with Database() as db:
+            # Try both possible step_ids
+            for step_id in ["email_scrape", "google_maps_scrape"]:
+                progress = db.get_job_execution(job_id, step_id)
+                if progress:
+                    return jsonify({
+                        "job_id": job_id,
+                        "step_id": step_id,
+                        "input": progress["input"],
+                        "max_pages": progress["max_pages"],
+                        "use_tor": progress["use_tor"],
+                        "headless": progress["headless"],
+                        "current_row": progress["current_row"],
+                        "total_rows": progress["total_rows"],
+                        "status": progress["status"],
+                        "error_message": progress["error_message"]
+                    }), 200
 
         return jsonify({"error": f"Job {job_id} not found"}), 404
 
@@ -224,39 +224,40 @@ def stop_scrape(job_id):
         if job_id not in active_jobs:
             return jsonify({"error": f"Job {job_id} not found or already stopped"}), 404
 
-        # Try both possible step_ids
-        step_id = None
-        progress = None
-        for possible_step_id in ["email_scrape", "google_maps_scrape"]:
-            progress = get_job_execution(job_id, possible_step_id)
+        with Database() as db:
+            # Try both possible step_ids
+            step_id = None
+            progress = None
+            for possible_step_id in ["email_scrape", "google_maps_scrape"]:
+                progress = db.get_job_execution(job_id, possible_step_id)
+                if progress:
+                    step_id = possible_step_id
+                    break
+
+            if not step_id or not progress:
+                return jsonify({"error": f"Job {job_id} not found in database"}), 404
+
+            # Create stop signal file
+            stop_file = os.path.join(Config.TEMP_PATH, f"stop_{step_id}.txt")
+            os.makedirs(Config.TEMP_PATH, exist_ok=True)
+            with open(stop_file, "w") as f:
+                f.write("stop")
+
+            # Update progress to stopped
+            progress = db.get_job_execution(job_id, step_id)
             if progress:
-                step_id = possible_step_id
-                break
-
-        if not step_id or not progress:
-            return jsonify({"error": f"Job {job_id} not found in database"}), 404
-
-        # Create stop signal file
-        stop_file = os.path.join(Config.TEMP_PATH, f"stop_{step_id}.txt")
-        os.makedirs(Config.TEMP_PATH, exist_ok=True)
-        with open(stop_file, "w") as f:
-            f.write("stop")
-
-        # Update progress to stopped
-        progress = get_job_execution(job_id, step_id)
-        if progress:
-            write_progress(
-                job_id=job_id,
-                step_id=step_id,
-                input=progress["input"],
-                max_pages=progress["max_pages"],
-                use_tor=progress["use_tor"],
-                headless=progress["headless"],
-                status="stopped",
-                stop_call=True,
-                current_row=progress["current_row"],
-                total_rows=progress["total_rows"]
-            )
+                write_progress(
+                    job_id=job_id,
+                    step_id=step_id,
+                    input=progress["input"],
+                    max_pages=progress["max_pages"],
+                    use_tor=progress["use_tor"],
+                    headless=progress["headless"],
+                    status="stopped",
+                    stop_call=True,
+                    current_row=progress["current_row"],
+                    total_rows=progress["total_rows"]
+                )
         
         # Wait for the thread to finish
         active_jobs[job_id].join(timeout=10)
@@ -290,7 +291,9 @@ def scrape_leads_emails():
         headless = data.get("headless", True)  # Default to True
 
         # Fetch leads from the database by default
-        leads = get_leads(status_filter="NOT scraped")
+        with Database() as db:
+            leads = db.get_leads(status_filter="NOT scraped")
+
         # For testing only (override with hardcoded leads if TEST_MODE is set)
         if os.getenv("TEST_MODE") == "true":
             leads = [
@@ -417,19 +420,19 @@ def scrape_leads_emails():
                 emails = validate_emails(emails)
 
                 # Update the database with the emails
-                conn = sqlite3.connect(os.path.join(Config.TEMP_PATH, "scraping.db"))
                 try:
-                    emails_str = ','.join(emails) if emails else None  # Convert to string or None
-                    update_lead(conn, job_id=lead['job_id'], place_id=lead['place_id'], emails=emails_str, status='scraped')
-                    logging.info(f"Updated emails in DB for lead {lead['lead_id']} (place_id: {lead['place_id']})")
-                    results.append({
-                        "lead_id": lead.get("lead_id", "unknown"),
-                        "website": website,
-                        "job_id": job_id,
-                        "status": status,
-                        "emails": emails,
-                        "error": None if emails else "No valid emails found"
-                    })
+                    with Database() as db:
+                        emails_str = ','.join(emails) if emails else None  # Convert to string or None
+                        db.update_lead(job_id=lead['job_id'], place_id=lead['place_id'], emails=emails_str, status='scraped')
+                        logging.info(f"Updated emails in DB for lead {lead['lead_id']} (place_id: {lead['place_id']})")
+                        results.append({
+                            "lead_id": lead.get("lead_id", "unknown"),
+                            "website": website,
+                            "job_id": job_id,
+                            "status": status,
+                            "emails": emails,
+                            "error": None if emails else "No valid emails found"
+                        })
                 except Exception as db_err:
                     logging.error(f"Failed to update DB for lead {lead['lead_id']}: {db_err}")
                     results.append({
@@ -440,8 +443,6 @@ def scrape_leads_emails():
                         "emails": emails,
                         "error": f"Database update failed: {str(db_err)}"
                     })
-                finally:
-                    conn.close()
 
             except requests.RequestException as e:
                 logging.error(f"Error initiating scrape job for {website}: {e}")
