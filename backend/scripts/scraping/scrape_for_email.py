@@ -55,7 +55,7 @@ def sort_urls_by_email_likelihood(urls):
     logging.info(f"Sorted {len(sorted_urls)} URLs by email likelihood")
     return sorted_urls
 
-def scrape_emails(job_id, step_id, base_url, max_pages=10, use_tor=False, headless=False):
+def scrape_emails(job_id, step_id, base_url, max_pages=10, use_tor=False, headless=False, sitemap_limit=10):
     """
     Orchestrate email scraping from a website using sitemaps and WebDriver.
     
@@ -65,6 +65,7 @@ def scrape_emails(job_id, step_id, base_url, max_pages=10, use_tor=False, headle
         max_pages (int): Maximum number of pages to scrape.
         use_tor (bool): Whether to use Tor for WebDriver setup.
         headless (bool): Whether to run WebDriver in headless mode.
+        sitemap_limit (int): Maximum number of sitemaps to process per depth.
     
     Returns:
         list: List of unique email addresses found.
@@ -92,7 +93,7 @@ def scrape_emails(job_id, step_id, base_url, max_pages=10, use_tor=False, headle
     
     # Discover URLs from sitemap files
     for sitemap_url in sitemap_urls:
-        urls_from_sitemap = get_urls_from_sitemap(driver, sitemap_url)
+        urls_from_sitemap = get_urls_from_sitemap(driver, sitemap_url, sitemap_limit=sitemap_limit)
         logging.info(f"URLs from sitemap {sitemap_url}: {urls_from_sitemap}")
         urls_to_visit.extend(urls_from_sitemap)
     

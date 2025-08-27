@@ -56,6 +56,7 @@ def start_scrape():
         max_pages = data.get("max_pages")  # Allow None
         use_tor = data.get("use_tor")  # Allow None
         headless = data.get("headless")  # Allow None
+        sitemap_limit = data.get("sitemap_limit", 10) # default to 10
 
         job_id = str(uuid.uuid4())
         step_id = "email_scrape"
@@ -67,7 +68,7 @@ def start_scrape():
         def scrape_task():
             try:
                 logging.info(f"Starting scrape job {job_id} for URL: {url}")
-                emails = scrape_emails(job_id, step_id, url, max_pages=max_pages, use_tor=use_tor, headless=headless)
+                emails = scrape_emails(job_id, step_id, url, max_pages=max_pages, use_tor=use_tor, headless=headless, sitemap_limit=sitemap_limit)
 
                 # Prepare the result dictionary
                 result = {"job_id": job_id, "input": url, "emails": emails}

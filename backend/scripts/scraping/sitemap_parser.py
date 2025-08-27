@@ -67,7 +67,7 @@ def get_robots_txt_urls(driver, base_url):
     logging.info(f"Total sitemap URLs found: {len(sitemap_urls)}")
     return sitemap_urls
 
-def parse_embedded_xml_sitemap(content, sitemap_url, driver, depth, max_depth, visited_sitemaps):
+def parse_embedded_xml_sitemap(content, sitemap_url, driver, depth, max_depth, visited_sitemaps, sitemap_limit=10):
     """
     Parse embedded XML content within HTML (e.g., inside <div id="webkit-xml-viewer-source-xml">).
     
@@ -78,6 +78,7 @@ def parse_embedded_xml_sitemap(content, sitemap_url, driver, depth, max_depth, v
         depth (int): Current recursion depth.
         max_depth (int): Maximum recursion depth.
         visited_sitemaps (set): Set of sitemap URLs already processed.
+        sitemap_limit (int): Maximum number of sitemaps to process per depth.
     
     Returns:
         list: List of page URLs extracted from the embedded XML.
@@ -104,12 +105,12 @@ def parse_embedded_xml_sitemap(content, sitemap_url, driver, depth, max_depth, v
         # Sitemap index (list of sitemaps)
         if root.tag == f"{namespace}sitemapindex":
             logging.info(f"Detected embedded XML sitemap index: {sitemap_url}")
-            for sitemap in root.findall(f"{namespace}sitemap"):
+            for sitemap in root.findall(f"{namespace}sitemap")[:sitemap_limit]:
                 loc = sitemap.find(f"{namespace}loc")
                 if loc is not None and loc.text and loc.text.strip():
                     child_url = loc.text.strip()
                     logging.info(f"Found child sitemap in embedded XML: {child_url}")
-                    child_urls = get_urls_from_sitemap(driver, child_url, depth=depth+1, max_depth=max_depth, visited_sitemaps=visited_sitemaps)
+                    child_urls = get_urls_from_sitemap(driver, child_url, depth=depth+1, max_depth=max_depth, visited_sitemaps=visited_sitemaps, sitemap_limit=sitemap_limit)
                     urls.extend(child_urls)
                 else:
                     logging.warning(f"Skipping invalid or empty <loc> in embedded sitemap: {sitemap_url}")
@@ -135,7 +136,7 @@ def parse_embedded_xml_sitemap(content, sitemap_url, driver, depth, max_depth, v
         logging.error(f"Error parsing embedded XML sitemap {sitemap_url}: {e}")
         return []
 
-def get_urls_from_sitemap(driver, sitemap_url, depth=0, max_depth=2, visited_sitemaps=None):
+def get_urls_from_sitemap(driver, sitemap_url, depth=0, max_depth=2, visited_sitemaps=None, sitemap_limit=10):
     """
     Parse sitemap XML or HTML using WebDriver and extract URLs, supporting sitemap indexes.
     
@@ -145,6 +146,7 @@ def get_urls_from_sitemap(driver, sitemap_url, depth=0, max_depth=2, visited_sit
         depth (int): Current recursion depth.
         max_depth (int): Maximum recursion depth.
         visited_sitemaps (set): Set of sitemap URLs already processed.
+        sitemap_limit (int): Maximum number of sitemaps to process per depth.
     
     Returns:
         list: List of page URLs extracted from the sitemap.
@@ -175,8 +177,8 @@ def get_urls_from_sitemap(driver, sitemap_url, depth=0, max_depth=2, visited_sit
             # Check for embedded XML in <div id="webkit-xml-viewer-source-xml">
             if '<div id="webkit-xml-viewer-source-xml">' in content:
                 logging.info(f"Found embedded XML in HTML for sitemap: {sitemap_url}")
-                return parse_embedded_xml_sitemap(content, sitemap_url, driver, depth, max_depth, visited_sitemaps)
-            return parse_html_sitemap(content, sitemap_url, driver, depth, max_depth, visited_sitemaps)
+                return parse_embedded_xml_sitemap(content, sitemap_url, driver, depth, max_depth, visited_sitemaps, sitemap_limit)
+            return parse_html_sitemap(content, sitemap_url, driver, depth, max_depth, visited_sitemaps, sitemap_limit)
         
         # Strip XML comments to avoid parsing issues
         content = re.sub(r'<!--.*?-->', '', content, flags=re.DOTALL)
@@ -196,12 +198,12 @@ def get_urls_from_sitemap(driver, sitemap_url, depth=0, max_depth=2, visited_sit
         # Sitemap index (list of sitemaps)
         if root.tag == f"{namespace}sitemapindex":
             logging.info(f"Detected sitemap index: {sitemap_url}")
-            for sitemap in root.findall(f"{namespace}sitemap"):
+            for sitemap in root.findall(f"{namespace}sitemap")[:sitemap_limit]:
                 loc = sitemap.find(f"{namespace}loc")
                 if loc is not None and loc.text and loc.text.strip():
                     child_url = loc.text.strip()
                     logging.info(f"Found child sitemap in XML: {child_url}")
-                    child_urls = get_urls_from_sitemap(driver, child_url, depth=depth+1, max_depth=max_depth, visited_sitemaps=visited_sitemaps)
+                    child_urls = get_urls_from_sitemap(driver, child_url, depth=depth+1, max_depth=max_depth, visited_sitemaps=visited_sitemaps, sitemap_limit=sitemap_limit)
                     urls.extend(child_urls)
                 else:
                     logging.warning(f"Skipping invalid or empty <loc> in sitemap: {sitemap_url}")
@@ -222,12 +224,12 @@ def get_urls_from_sitemap(driver, sitemap_url, depth=0, max_depth=2, visited_sit
         return urls
     except ET.ParseError:
         logging.error(f"Failed to parse sitemap as XML, attempting HTML parsing: {sitemap_url}")
-        return parse_html_sitemap(content, sitemap_url, driver, depth, max_depth, visited_sitemaps)
+        return parse_html_sitemap(content, sitemap_url, driver, depth, max_depth, visited_sitemaps, sitemap_limit)
     except Exception as e:
         logging.error(f"Error parsing sitemap {sitemap_url}: {e}")
         return []
 
-def parse_html_sitemap(content, sitemap_url, driver, depth, max_depth, visited_sitemaps):
+def parse_html_sitemap(content, sitemap_url, driver, depth, max_depth, visited_sitemaps, sitemap_limit=10):
     """
     Parse HTML sitemap page to extract sitemap URLs and page URLs.
     
@@ -238,6 +240,7 @@ def parse_html_sitemap(content, sitemap_url, driver, depth, max_depth, visited_s
         depth (int): Current recursion depth.
         max_depth (int): Maximum recursion depth.
         visited_sitemaps (set): Set of sitemap URLs already processed.
+        sitemap_limit (int): Maximum number of sitemaps to process per depth.
     
     Returns:
         list: List of page URLs extracted from the HTML sitemap.
@@ -292,9 +295,9 @@ def parse_html_sitemap(content, sitemap_url, driver, depth, max_depth, visited_s
         
         # Recursively process sitemap URLs
         urls = page_urls  # Start with page URLs found in HTML
-        for url in sitemap_urls:
+        for url in sitemap_urls[:sitemap_limit]:
             logging.info(f"Processing HTML-derived sitemap: {url}")
-            child_urls = get_urls_from_sitemap(driver, url, depth=depth+1, max_depth=max_depth, visited_sitemaps=visited_sitemaps)
+            child_urls = get_urls_from_sitemap(driver, url, depth=depth+1, max_depth=max_depth, visited_sitemaps=visited_sitemaps, sitemap_limit=sitemap_limit)
             urls.extend(child_urls)
         
         logging.info(f"Extracted {len(urls)} page URLs from HTML sitemap: {sitemap_url} (sitemaps: {len(sitemap_urls)}, pages: {len(page_urls)})")
