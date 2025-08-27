@@ -213,7 +213,7 @@ def get_urls_from_sitemap(driver, sitemap_url, depth=0, max_depth=2, visited_sit
                 loc = url_tag.find(f"{namespace}loc")
                 if loc is not None and loc.text and loc.text.strip():
                     page_url = loc.text.strip()
-                    logging.info(f"Found page URL in XML sitemap: {page_url}")
+                    logging.debug(f"Found page URL in XML sitemap: {page_url}")
                     urls.append(page_url)
                 else:
                     logging.warning(f"Skipping invalid or empty <loc> in URL set: {sitemap_url}")

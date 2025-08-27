@@ -59,7 +59,6 @@ def load_csv(input_csv, output_csv, required_columns=None):
         print(f"Error loading CSV: {e}")
         return None, None
     
-
 def is_non_business_domain(domain):
     """
     Check if the domain is a common non-business website.
@@ -117,29 +116,58 @@ def extract_base_url(url):
 
 def validate_url(url):
     """
-    Validate a URL and normalize it by adding https:// if no scheme is provided.
-    
+    Validate a URL, normalize it by adding https:// if no scheme is provided.
+    and check if the domain is a non-business domain.
     Args:
         url (str): URL to validate.
     
     Returns:
-        tuple: (str, str) - (Normalized URL, error message if invalid, else None)
+        tuple: (str, str) - (Normalized base URL, error message if invalid or non-business, else None)
     """
+    # List of non-business domains
+    non_business_domains = [
+        'airbnb.co.uk', 'airbnb.co.za', 'airbnb.com', 'airbnb.mx', 'airbnb.net',
+        'airbnbmail.com', 'booking.com', 'facebook.com', 'instagram.com', 'jscache.com',
+        'linkedin.com', 'muscache.com', 'pinterest.com', 'snapchat.com', 'tacdn.com',
+        'tamgrt.com', 'tiktok.com', 'tripadvisor.cn', 'tripadvisor.co.uk',
+        'tripadvisor.com', 'tripadvisor.de', 'twitter.com', 'x.com', 'youtube.com', "ihg.com"
+    ]
+
     try:
         # Validate URL format
-        if not re.match(r"^https?://[\w\-]+(\.[\w\-]+)+[/\w\-]*$", url):
+        if not re.match(r"^https?://[\w\-]+(\.[\w\-]+)+[/\w\-\?\=\&\.\;\%]*$", url):
             if not url.startswith(("http://", "https://")):
                 url = f"https://{url}"
-                if not re.match(r"^https?://[\w\-]+(\.[\w\-]+)+[/\w\-]*$", url):
+                if not re.match(r"^https?://[\w\-]+(\.[\w\-]+)+[/\w\-\?\=\&\.\;\%]*$", url):
                     return None, "Invalid URL format"
             else:
                 return None, "Invalid URL format"
-        return url, None
+        
+        # Parse URL to extract domain
+        parsed = urlparse(url)
+        domain = parsed.netloc.lower()
+        
+        # Extract second-level domain (SLD) from input domain
+        domain_parts = domain.split('.')
+        sld = domain_parts[-2] if len(domain_parts) >= 2 else domain
+        
+        # Check if the SLD matches the SLD of any non-business domain
+        for non_business in non_business_domains:
+            non_business_parts = non_business.split('.')
+            non_business_sld = non_business_parts[-2] if len(non_business_parts) >= 2 else non_business
+            if sld == non_business_sld:
+                logging.info(f"Non-business domain: {domain} (SLD: {sld})")
+                return None, "Non-business domain"
+        
+        # Return normalized base URL
+        base_url = f'{parsed.scheme}://{parsed.netloc}'.lower()
+        return base_url, None
+
     except Exception as e:
         logging.error(f"Error validating URL {url}: {e}")
         return None, f"Error validating URL: {str(e)}"
 
-def poll_job_progress(base_url, job_id, max_retries=60, retry_delay=5):
+def poll_job_progress(base_url, job_id, max_retries=720, retry_delay=5):
     """
     Poll the progress of a job until it completes, fails, or is stopped.
     
