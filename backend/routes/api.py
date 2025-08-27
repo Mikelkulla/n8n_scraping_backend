@@ -337,6 +337,17 @@ def scrape_leads_emails():
             website = lead.get("website")
             if not website:
                 logging.warning(f"Lead {lead.get('lead_id', 'unknown')} has no website, skipping.")
+                try:
+                    with Database() as db:
+                        db.update_lead(
+                            job_id=lead.get("job_id"),
+                            place_id=lead.get("place_id"),
+                            status="skipped"
+                        )
+                    logging.info(f"Updated lead {lead.get('lead_id')} status to 'skipped' in DB.")
+                except Exception as e:
+                    logging.error(f"Failed to update status for lead {lead.get('lead_id')} to 'skipped': {e}")
+
                 results.append({
                     "lead_id": lead.get("lead_id", "unknown"),
                     "website": None,
@@ -351,6 +362,17 @@ def scrape_leads_emails():
             website, error = validate_url(website)
             if error:
                 logging.error(f"Invalid website URL for lead {lead.get('lead_id', 'unknown')}: {error}")
+                try:
+                    with Database() as db:
+                        db.update_lead(
+                            job_id=lead.get("job_id"),
+                            place_id=lead.get("place_id"),
+                            status="failed"
+                        )
+                    logging.info(f"Updated lead {lead.get('lead_id')} status to 'failed' in DB.")
+                except Exception as e:
+                    logging.error(f"Failed to update status for lead {lead.get('lead_id')} to 'failed': {e}")
+
                 results.append({
                     "lead_id": lead.get("lead_id", "unknown"),
                     "website": website,
@@ -423,16 +445,24 @@ def scrape_leads_emails():
                 try:
                     with Database() as db:
                         emails_str = ','.join(emails) if emails else None  # Convert to string or None
-                        db.update_lead(job_id=lead['job_id'], place_id=lead['place_id'], emails=emails_str, status='scraped')
+                        db.update_lead(
+                            job_id=lead['job_id'], 
+                            place_id=lead['place_id'], 
+                            emails=emails_str, 
+                            status='scraped'
+                            )
+
                         logging.info(f"Updated emails in DB for lead {lead['lead_id']} (place_id: {lead['place_id']})")
-                        results.append({
+                        results.append(
+                            {
                             "lead_id": lead.get("lead_id", "unknown"),
                             "website": website,
                             "job_id": job_id,
                             "status": status,
                             "emails": emails,
                             "error": None if emails else "No valid emails found"
-                        })
+                            }
+                        )
                 except Exception as db_err:
                     logging.error(f"Failed to update DB for lead {lead['lead_id']}: {db_err}")
                     results.append({
