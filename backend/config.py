@@ -8,15 +8,15 @@ load_dotenv()
 class Config:
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", None)
 
-    BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-    ROOT_DIR = os.path.abspath(os.path.join(BASE_DIR, "..")) # , ".."
+    BASE_DIR = os.path.abspath(os.path.dirname(__file__))               # Base dir of the project (backend)
+    ROOT_DIR = os.path.abspath(os.path.join(BASE_DIR, "..")) # , ".."   # Project root dir (n8n_scraping_backend)
     
     # Data and log paths
-    LOG_PATH = os.path.join(BASE_DIR, "log_files")
-    LOG_PREFIX = "Log_File"
-    MAX_BYTES = 100*1024*1024
-    SCRIPTS_PATH = os.path.join(BASE_DIR, "scripts")
-    TEMP_PATH = os.path.join(BASE_DIR, "temp")  # New temp folder
+    LOG_PATH = os.path.join(BASE_DIR, "log_files")                      # Path to log files folder
+    LOG_PREFIX = "Log_File"                                             # Log file prefix name (Currently logs are named: {Logs_prefix}_dd_mm_yyyy.log)
+    MAX_BYTES = 100*1024*1024                                           # Maximum byte number per logfile before rotating it to a new file and appending time ("hh-mm-ss) in the end
+    SCRIPTS_PATH = os.path.join(BASE_DIR, "scripts")                    # Path to the script folder
+    TEMP_PATH = os.path.join(BASE_DIR, "temp")                          # Path to temp folder (There you can find some scraping results, scraping.db file etc.)
     
     # Tor configuration
     TOR_BASE_PATH = os.path.join(ROOT_DIR, "config", "tor")
