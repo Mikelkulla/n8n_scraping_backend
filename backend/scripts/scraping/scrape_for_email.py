@@ -94,7 +94,7 @@ def scrape_emails(job_id, step_id, base_url, max_pages=10, use_tor=False, headle
     # Discover URLs from sitemap files
     for sitemap_url in sitemap_urls:
         urls_from_sitemap = get_urls_from_sitemap(driver, sitemap_url, sitemap_limit=sitemap_limit)
-        logging.info(f"URLs from sitemap {sitemap_url}: {urls_from_sitemap}")
+        logging.info(f"Discovered {len(urls_from_sitemap)} URLs from sitemap {sitemap_url}")
         urls_to_visit.extend(urls_from_sitemap)
     
     # Normalize domain
