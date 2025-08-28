@@ -122,7 +122,7 @@ def parse_embedded_xml_sitemap(content, sitemap_url, driver, depth, max_depth, v
                 loc = url_tag.find(f"{namespace}loc")
                 if loc is not None and loc.text and loc.text.strip():
                     page_url = loc.text.strip()
-                    logging.info(f"Found page URL in embedded XML sitemap: {page_url}")
+                    logging.debug(f"Found page URL in embedded XML sitemap: {page_url}")
                     urls.append(page_url)
                 else:
                     logging.warning(f"Skipping invalid or empty <loc> in embedded URL set: {sitemap_url}")
@@ -286,10 +286,10 @@ def parse_html_sitemap(content, sitemap_url, driver, depth, max_depth, visited_s
                     url = urljoin(sitemap_url, url)
                     if url.endswith('.xml'):
                         sitemap_urls.append(url)
-                        logging.info(f"Found sitemap URL in HTML: {url}")
+                        logging.debug(f"Found sitemap URL in HTML: {url}")
                     else:
                         page_urls.append(url)
-                        logging.info(f"Found page URL in HTML: {url}")
+                        logging.debug(f"Found page URL in HTML: {url}")
         else:
             logging.warning(f"No suitable table found in HTML sitemap: {sitemap_url}")
         

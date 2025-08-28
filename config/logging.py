@@ -5,7 +5,7 @@ from logging.handlers import RotatingFileHandler
 from backend.config import Config
 
 
-def setup_logging(log_dir=Config.LOG_PATH, log_prefix=Config.LOG_PREFIX, max_bytes=Config.MAX_BYTES):
+def setup_logging(log_dir=Config.LOG_PATH, log_prefix=Config.LOG_PREFIX, max_bytes=Config.MAX_BYTES, log_level=Config.LOG_LEVEL):
     """
     Sets up logging with a date-based log file in the specified directory.
     Rotates the log file when it exceeds max_bytes, appending a timestamp to the rotated file.
@@ -16,6 +16,7 @@ def setup_logging(log_dir=Config.LOG_PATH, log_prefix=Config.LOG_PREFIX, max_byt
         log_dir (str): Directory to save the log file.
         log_prefix (str): Prefix for the log file name.
         max_bytes (int): Maximum file size in bytes before rotation (default: 100MB).
+        log_level (str): The logging level (e.g., "INFO", "DEBUG").
 
     Returns:
         None
@@ -23,6 +24,16 @@ def setup_logging(log_dir=Config.LOG_PATH, log_prefix=Config.LOG_PREFIX, max_byt
     # Create date-based log file name (e.g., logprefix_24_08_2025.log)
     date_str = datetime.now().strftime("%d_%m_%Y")
     log_file = os.path.join(log_dir, f"{log_prefix}_{date_str}.log")
+
+    # Map log level string to logging constants
+    log_level_map = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR,
+        "CRITICAL": logging.CRITICAL,
+    }
+    numeric_log_level = log_level_map.get(log_level.upper(), logging.INFO)
 
     # Custom RotatingFileHandler to rename rotated files with end timestamp
     class TimestampedRotatingFileHandler(RotatingFileHandler):
@@ -53,15 +64,15 @@ def setup_logging(log_dir=Config.LOG_PATH, log_prefix=Config.LOG_PREFIX, max_byt
             maxBytes=max_bytes,
             backupCount=0  # No numbered backups, as we're using timestamps
         )
-        handler.setLevel(logging.INFO)
+        handler.setLevel(numeric_log_level)
         formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(filename)s - %(message)s')
         handler.setFormatter(formatter)
 
         # Configure the root logger
-        logging.getLogger('').setLevel(logging.INFO)
+        logging.getLogger('').setLevel(numeric_log_level)
         logging.getLogger('').addHandler(handler)
 
-        logging.info(f"Logging initialized to {log_file} with max size {max_bytes} bytes")
+        logging.info(f"Logging initialized to {log_file} with level {log_level} and max size {max_bytes} bytes")
     except (OSError, PermissionError) as e:
         # Fallback to current directory with date-based log file
         fallback_log_file = f"{log_prefix}_{date_str}.log"
@@ -70,12 +81,13 @@ def setup_logging(log_dir=Config.LOG_PATH, log_prefix=Config.LOG_PREFIX, max_byt
             maxBytes=max_bytes,
             backupCount=0
         )
-        handler.setLevel(logging.INFO)
+        handler.setLevel(numeric_log_level)
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(filename)s - %(message)s')
         handler.setFormatter(formatter)
 
-        logging.getLogger('').setLevel(logging.INFO)
+        logging.getLogger('').setLevel(numeric_log_level)
         logging.getLogger('').addHandler(handler)
 
         logging.error(f"Failed to save log to {log_file}: {e}")
-        logging.info(f"Fallback logging initialized to {fallback_log_file}")
+        logging.info(f"Fallback logging initialized to {fallback_log_file} with level {log_level}")
         print(f"Error: Could not save log to {log_file}. Using {fallback_log_file} instead.")

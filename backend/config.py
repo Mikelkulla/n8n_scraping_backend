@@ -15,6 +15,7 @@ class Config:
     LOG_PATH = os.path.join(BASE_DIR, "log_files")                      # Path to log files folder
     LOG_PREFIX = "Log_File"                                             # Log file prefix name (Currently logs are named: {Logs_prefix}_dd_mm_yyyy.log)
     MAX_BYTES = 100*1024*1024                                           # Maximum byte number per logfile before rotating it to a new file and appending time ("hh-mm-ss) in the end
+    LOG_LEVEL = os.getenv("LOG_LEVEL", "DEBUG")                          # Default log level (e.g., "DEBUG", "INFO", "WARNING")
     SCRIPTS_PATH = os.path.join(BASE_DIR, "scripts")                    # Path to the script folder
     TEMP_PATH = os.path.join(BASE_DIR, "temp")                          # Path to temp folder (There you can find some scraping results, scraping.db file etc.)
     
