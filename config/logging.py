@@ -72,6 +72,11 @@ def setup_logging(log_dir=Config.LOG_PATH, log_prefix=Config.LOG_PREFIX, max_byt
         logging.getLogger('').setLevel(numeric_log_level)
         logging.getLogger('').addHandler(handler)
 
+        # Set log levels for specific libraries
+        for lib, level_str in Config.LIBRARY_LOG_LEVELS.items():
+            lib_level = log_level_map.get(level_str.upper(), logging.WARNING)
+            logging.getLogger(lib).setLevel(lib_level)
+
         logging.info(f"Logging initialized to {log_file} with level {log_level} and max size {max_bytes} bytes")
     except (OSError, PermissionError) as e:
         # Fallback to current directory with date-based log file
@@ -87,6 +92,11 @@ def setup_logging(log_dir=Config.LOG_PATH, log_prefix=Config.LOG_PREFIX, max_byt
 
         logging.getLogger('').setLevel(numeric_log_level)
         logging.getLogger('').addHandler(handler)
+
+        # Set log levels for specific libraries in fallback mode
+        for lib, level_str in Config.LIBRARY_LOG_LEVELS.items():
+            lib_level = log_level_map.get(level_str.upper(), logging.WARNING)
+            logging.getLogger(lib).setLevel(lib_level)
 
         logging.error(f"Failed to save log to {log_file}: {e}")
         logging.info(f"Fallback logging initialized to {fallback_log_file} with level {log_level}")

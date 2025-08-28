@@ -1,3 +1,4 @@
+import json
 import os
 import platform
 from dotenv import load_dotenv
@@ -15,9 +16,28 @@ class Config:
     LOG_PATH = os.path.join(BASE_DIR, "log_files")                      # Path to log files folder
     LOG_PREFIX = "Log_File"                                             # Log file prefix name (Currently logs are named: {Logs_prefix}_dd_mm_yyyy.log)
     MAX_BYTES = 100*1024*1024                                           # Maximum byte number per logfile before rotating it to a new file and appending time ("hh-mm-ss) in the end
-    LOG_LEVEL = os.getenv("LOG_LEVEL", "DEBUG")                          # Default log level (e.g., "DEBUG", "INFO", "WARNING")
     SCRIPTS_PATH = os.path.join(BASE_DIR, "scripts")                    # Path to the script folder
     TEMP_PATH = os.path.join(BASE_DIR, "temp")                          # Path to temp folder (There you can find some scraping results, scraping.db file etc.)
+    LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")                          # Default log level (e.g., "DEBUG", "INFO", "WARNING")
+    
+    # Library-specific log levels
+    _default_library_log_levels = {
+        "urllib3": "WARNING", 
+        "selenium": "WARNING",
+        "bs4": "WARNING",              # for beautifulsoup4
+        "fake_useragent": "WARNING",   # can log unnecessary warnings
+        "flask": "WARNING",            # Flask app logs a lot at INFO
+        "geopy": "WARNING",            # geopy can log retries/errors
+        "pandas": "WARNING",           # pandas logs warnings often
+        "psutil": "WARNING",           # suppress low-level system info logs
+        "dotenv": "WARNING",           # for python-dotenv
+        "requests": "WARNING",         # to silence urllib3-style logs
+    }
+
+    try:
+        LIBRARY_LOG_LEVELS = json.loads(os.getenv("LIBRARY_LOG_LEVELS")) if os.getenv("LIBRARY_LOG_LEVELS") else _default_library_log_levels
+    except json.JSONDecodeError:
+        LIBRARY_LOG_LEVELS = _default_library_log_levels
     
     # Tor configuration
     TOR_BASE_PATH = os.path.join(ROOT_DIR, "config", "tor")
