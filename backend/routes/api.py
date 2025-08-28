@@ -40,7 +40,8 @@ def start_scrape():
         - max_pages (int, optional): Maximum number of pages to scrape.
         - use_tor (bool, optional): Whether to use Tor for scraping.
         - headless (bool, optional): Whether to run WebDriver in headless mode.
-
+        - sitemap_limit (int, optional): Max number of sub-sitemaps to scrape 
+        
     Returns:
         JSON response with job_id and status.
     """
