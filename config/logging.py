@@ -27,12 +27,21 @@ def setup_logging(log_dir=Config.LOG_PATH, log_prefix=Config.LOG_PREFIX, max_byt
     # Custom RotatingFileHandler to rename rotated files with end timestamp
     class TimestampedRotatingFileHandler(RotatingFileHandler):
         def doRollover(self):
+            # First, close the existing stream to release the file handle.
+            if self.stream:
+                self.stream.close()
+                self.stream = None
+            
             end_time = datetime.now().strftime("%H_%M_%S")
-            # Rename the current log file with the end timestamp before rotation
+            # Rename the current log file with the end timestamp.
             if os.path.exists(self.baseFilename):
                 rotated_file = f"{self.baseFilename[:-4]}_{end_time}.log"
                 os.rename(self.baseFilename, rotated_file)
-            super().doRollover()
+            
+            # Explicitly open a new stream. This is more robust than waiting for
+            # the next log message to trigger the open.
+            if not self.delay:
+                self.stream = self._open()
 
     try:
         # Create log directory if it doesn't exist
