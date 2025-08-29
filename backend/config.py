@@ -72,7 +72,10 @@ class Config:
     
     # Flask settings
     SECRET_KEY = os.urandom(24)
-    
+
+    # Scraping settings
+    MAX_THREADS = int(os.getenv("MAX_THREADS", 5))  # Max threads for concurrent scraping
+
     # Ensure directories exist
     @staticmethod
     def init_dirs():

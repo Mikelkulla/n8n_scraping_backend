@@ -86,9 +86,11 @@ def scrape_emails(job_id, step_id, base_url, max_pages=10, use_tor=False, headle
     
     # Discover sitemap URLs from robots.txt
     sitemap_urls = get_robots_txt_urls(driver, base_url)
-    sitemap_urls.append(urljoin(base_url, "/sitemap_index.xml"))
-    sitemap_urls.append(urljoin(base_url, "/sitemap.xml"))
-    sitemap_urls.append(urljoin(base_url, "/sitemapindex.xml"))
+    sitemap_urls.extend([
+        urljoin(base_url, "/sitemap_index.xml"),
+        urljoin(base_url, "/sitemap.xml"),
+        urljoin(base_url, "/sitemapindex.xml")
+    ])
     logging.info(f"Sitemap URLs discovered for job {job_id}: {sitemap_urls}")
     
     # Discover URLs from sitemap files
