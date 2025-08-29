@@ -8,12 +8,6 @@ import logging
 def sort_urls_by_email_likelihood(urls):
     """
     Sort URLs by likelihood of containing emails based on keywords and length.
-    
-    Args:
-        urls (list): List of URLs to sort.
-    
-    Returns:
-        list: Deduplicated URLs sorted by email likelihood (highest first).
     """
     # Keywords indicating high email likelihood
     email_keywords = [
@@ -39,7 +33,7 @@ def sort_urls_by_email_likelihood(urls):
         length_score = max(0, 100 - length) / 10  # Normalize to 0-10 range
         score += length_score
         logging.debug(f"URL {url} length {length}, length_score: {length_score}")
-        
+
         return score
     
     # Remove duplicates while preserving order
@@ -55,100 +49,110 @@ def sort_urls_by_email_likelihood(urls):
     logging.info(f"Sorted {len(sorted_urls)} URLs by email likelihood")
     return sorted_urls
 
-def scrape_emails(job_id, step_id, base_url, max_pages=10, use_tor=False, headless=False, sitemap_limit=10):
+class EmailScraper:
     """
-    Orchestrate email scraping from a website using sitemaps and WebDriver.
-    
-    Args:
-        job_id (str): Unique identifier for the job (e.g., UUID).
-        base_url (str): Base URL of the website to scrape.
-        max_pages (int): Maximum number of pages to scrape.
-        use_tor (bool): Whether to use Tor for WebDriver setup.
-        headless (bool): Whether to run WebDriver in headless mode.
-        sitemap_limit (int): Maximum number of sitemaps to process per depth.
-    
-    Returns:
-        list: List of unique email addresses found.
+    A class to orchestrate email scraping from a website.
     """
-    # Initialize WebDriver
-    logging.info(f"Starting Chrome WebDriver for job {job_id}...")
-    driver = setup_chrome_with_tor(headless=headless) if use_tor else setup_driver(headless=headless)
-    if not driver:
-        logging.error(f"Failed to initialize WebDriver for job {job_id}.")
-        write_progress(job_id, step_id, base_url, max_pages, use_tor, headless, status="failed", error_message="Failed to initialize WebDriver", current_row=0, total_rows=max_pages)
-        return []
-    
-    all_emails = set()
-    visited_urls = set()
-    urls_to_visit = [base_url]
-    
-    logging.info(f"Starting URL for job {job_id}: {base_url}")
-    
-    # Discover sitemap URLs from robots.txt
-    sitemap_urls = get_robots_txt_urls(driver, base_url)
-    sitemap_urls.extend([
-        urljoin(base_url, "/sitemap_index.xml"),
-        urljoin(base_url, "/sitemap.xml"),
-        urljoin(base_url, "/sitemapindex.xml")
-    ])
-    logging.info(f"Sitemap URLs discovered for job {job_id}: {sitemap_urls}")
-    
-    # Discover URLs from sitemap files
-    for sitemap_url in sitemap_urls:
-        urls_from_sitemap = get_urls_from_sitemap(driver, sitemap_url, sitemap_limit=sitemap_limit)
-        logging.info(f"Discovered {len(urls_from_sitemap)} URLs from sitemap {sitemap_url}")
-        urls_to_visit.extend(urls_from_sitemap)
-    
-    # Normalize domain
-    def get_base_domain(netloc):
-        return netloc.lower().removeprefix("www.")
-    
-    base_domain = get_base_domain(urlparse(base_url).netloc)
-    logging.info(f"Base domain for filtering URLs: {base_domain}")
-    
-    # Deduplicate and filter to base domain only
-    filtered_urls = []
-    for url in urls_to_visit:
-        parsed = urlparse(url)
-        if get_base_domain(parsed.netloc) == base_domain:
-            filtered_urls.append(url)
-        else:
-            logging.info(f"Ignoring URL from different domain: {url}")
-    
-    # Sort URLs by email likelihood
-    unique_sorted_urls = sort_urls_by_email_likelihood(filtered_urls)
-    total_urls = min(len(unique_sorted_urls), max_pages)
-    logging.info(f"Total URLs to visit after filtering and sorting for job {job_id}: {total_urls}")
-    
-    # Update initial progress with total_urls
-    write_progress(job_id, step_id, base_url, max_pages, use_tor, headless, status="running", current_row=0, total_rows=total_urls)
-    
-    try:
-        for i, url in enumerate(unique_sorted_urls[:max_pages], 1):
-            if check_stop_signal(step_id):
-                logging.info(f"Stop signal detected for job {job_id}")
-                write_progress(job_id, step_id, base_url, max_pages, use_tor, headless, status="stopped", stop_call=True, current_row=i-1, total_rows=total_urls)
+    def __init__(self, job_id, step_id, base_url, max_pages=10, use_tor=False, headless=False, sitemap_limit=10):
+        self.job_id = job_id
+        self.step_id = step_id
+        self.base_url = base_url
+        self.max_pages = max_pages
+        self.use_tor = use_tor
+        self.headless = headless
+        self.sitemap_limit = sitemap_limit
+        
+        self.driver = None
+        self.all_emails = set()
+        self.visited_urls = set()
+        self.urls_to_visit = [self.base_url]
+        self.total_urls = 0
+
+    def _setup_driver(self):
+        """Initializes the Selenium WebDriver."""
+        logging.info(f"Starting Chrome WebDriver for job {self.job_id}...")
+        self.driver = setup_chrome_with_tor(headless=self.headless) if self.use_tor else setup_driver(headless=self.headless)
+        if not self.driver:
+            logging.error(f"Failed to initialize WebDriver for job {self.job_id}.")
+            raise RuntimeError("Failed to initialize WebDriver")
+
+    def _discover_urls(self):
+        """Discovers URLs from robots.txt and sitemaps."""
+        logging.info(f"Starting URL for job {self.job_id}: {self.base_url}")
+        sitemap_urls = get_robots_txt_urls(self.driver, self.base_url)
+        sitemap_urls.extend([
+            urljoin(self.base_url, "/sitemap_index.xml"),
+            urljoin(self.base_url, "/sitemap.xml"),
+            urljoin(self.base_url, "/sitemapindex.xml")
+        ])
+        logging.info(f"Sitemap URLs discovered for job {self.job_id}: {sitemap_urls}")
+
+        for sitemap_url in sitemap_urls:
+            urls_from_sitemap = get_urls_from_sitemap(self.driver, sitemap_url, sitemap_limit=self.sitemap_limit)
+            logging.info(f"Discovered {len(urls_from_sitemap)} URLs from sitemap {sitemap_url}")
+            self.urls_to_visit.extend(urls_from_sitemap)
+
+    def _filter_and_sort_urls(self):
+        """Filters URLs to the base domain and sorts them by email likelihood."""
+        def get_base_domain(netloc):
+            return netloc.lower().removeprefix("www.")
+
+        base_domain = get_base_domain(urlparse(self.base_url).netloc)
+        logging.info(f"Base domain for filtering URLs: {base_domain}")
+
+        filtered_urls = [url for url in self.urls_to_visit if get_base_domain(urlparse(url).netloc) == base_domain]
+        
+        self.urls_to_visit = sort_urls_by_email_likelihood(filtered_urls)
+        self.total_urls = min(len(self.urls_to_visit), self.max_pages)
+        logging.info(f"Total URLs to visit after filtering and sorting for job {self.job_id}: {self.total_urls}")
+
+    def _scrape_pages(self):
+        """Iterates through URLs and scrapes them for emails."""
+        write_progress(self.job_id, self.step_id, self.base_url, self.max_pages, self.use_tor, self.headless, status="running", current_row=0, total_rows=self.total_urls)
+
+        for i, url in enumerate(self.urls_to_visit[:self.max_pages], 1):
+            if check_stop_signal(self.step_id):
+                logging.info(f"Stop signal detected for job {self.job_id}")
+                write_progress(self.job_id, self.step_id, self.base_url, self.max_pages, self.use_tor, self.headless, status="stopped", stop_call=True, current_row=i-1, total_rows=self.total_urls)
                 break
             
-            scrape_page(driver, url, max_pages, visited_urls, all_emails)
-            logging.info(f"Scraped page {i}/{total_urls} for job {job_id}: {url}")
+            scrape_page(self.driver, url, self.max_pages, self.visited_urls, self.all_emails)
+            logging.info(f"Scraped page {i}/{self.total_urls} for job {self.job_id}: {url}")
 
-            # Update progress after each page
-            write_progress(job_id, step_id, base_url, max_pages, use_tor, headless, status="running", current_row=i, total_rows=total_urls)
+            write_progress(self.job_id, self.step_id, self.base_url, self.max_pages, self.use_tor, self.headless, status="running", current_row=i, total_rows=self.total_urls)
         
-        if not check_stop_signal(step_id):
-            # Update progress to completed if not stopped
-            write_progress(job_id, step_id, base_url, max_pages, use_tor, headless, status="completed", total_rows=total_urls)
-        
-        logging.info(f"Finished scraping for job {job_id}. Total unique emails found: {len(all_emails)}")
-        logging.info(f"Emails: {all_emails}")
-        return list(all_emails)
-    
-    except Exception as e:
-        logging.error(f"Scraping failed for job {job_id}: {e}")
-        write_progress(job_id, step_id, base_url, max_pages, use_tor, headless, status="failed", error_message=str(e), total_rows=total_urls)
-        return list(all_emails)
-    
-    finally:
-        logging.info(f"Closing WebDriver for job {job_id}...")
-        driver.quit()
+        if not check_stop_signal(self.step_id):
+            write_progress(self.job_id, self.step_id, self.base_url, self.max_pages, self.use_tor, self.headless, status="completed", total_rows=self.total_urls)
+
+    def _cleanup(self):
+        """Closes the WebDriver."""
+        if self.driver:
+            logging.info(f"Closing WebDriver for job {self.job_id}...")
+            self.driver.quit()
+
+    def run(self):
+        """
+        Executes the entire email scraping process.
+        """
+        try:
+            self._setup_driver()
+            self._discover_urls()
+            self._filter_and_sort_urls()
+            self._scrape_pages()
+            
+            logging.info(f"Finished scraping for job {self.job_id}. Total unique emails found: {len(self.all_emails)}")
+            logging.info(f"Emails: {self.all_emails}")
+            return list(self.all_emails)
+        except Exception as e:
+            logging.error(f"Scraping failed for job {self.job_id}: {e}")
+            write_progress(self.job_id, self.step_id, self.base_url, self.max_pages, self.use_tor, self.headless, status="failed", error_message=str(e), total_rows=self.total_urls)
+            return list(self.all_emails)
+        finally:
+            self._cleanup()
+
+def scrape_emails(job_id, step_id, base_url, max_pages=10, use_tor=False, headless=False, sitemap_limit=10):
+    """
+    Orchestrates email scraping by using the EmailScraper class.
+    """
+    scraper = EmailScraper(job_id, step_id, base_url, max_pages, use_tor, headless, sitemap_limit)
+    return scraper.run()
