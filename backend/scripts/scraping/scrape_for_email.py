@@ -1,7 +1,7 @@
 from urllib.parse import urljoin, urlparse
 from .sitemap_parser import get_robots_txt_urls, get_urls_from_sitemap
 from .page_scraper import scrape_page
-from ..selenium.driver_setup_for_scrape import setup_driver, setup_chrome_with_tor
+from ..selenium.webdriver_manager import WebDriverManager
 from config.job_functions import write_progress, check_stop_signal
 import logging
 
@@ -61,7 +61,7 @@ class EmailScraper:
         self.use_tor = use_tor
         self.headless = headless
         self.sitemap_limit = sitemap_limit
-        
+        self.manager = None
         self.driver = None
         self.all_emails = set()
         self.visited_urls = set()
@@ -71,7 +71,8 @@ class EmailScraper:
     def _setup_driver(self):
         """Initializes the Selenium WebDriver."""
         logging.info(f"Starting Chrome WebDriver for job {self.job_id}...")
-        self.driver = setup_chrome_with_tor(headless=self.headless) if self.use_tor else setup_driver(headless=self.headless)
+        self.manager = WebDriverManager(use_tor=self.use_tor, headless=self.headless)
+        self.driver = self.manager.get_driver()
         if not self.driver:
             logging.error(f"Failed to initialize WebDriver for job {self.job_id}.")
             raise RuntimeError("Failed to initialize WebDriver")
@@ -126,9 +127,9 @@ class EmailScraper:
 
     def _cleanup(self):
         """Closes the WebDriver."""
-        if self.driver:
+        if self.manager:
             logging.info(f"Closing WebDriver for job {self.job_id}...")
-            self.driver.quit()
+            self.manager.close()
 
     def run(self):
         """
