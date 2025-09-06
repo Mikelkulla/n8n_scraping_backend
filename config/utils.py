@@ -258,7 +258,11 @@ def is_example_domain(email):
     """
     EXAMPLE_DOMAINS = {"example.me","example.com", "example.org", "example.net", "test.com", "sample.com"}
     email = email.lower()
-    return any(email.endswith("@" + domain) for domain in EXAMPLE_DOMAINS)
+    domain = email.split('@')[-1]
+    for example_domain in EXAMPLE_DOMAINS:
+        if domain == example_domain or domain.endswith('.' + example_domain):
+            return True
+    return False
 
 def validate_emails(emails):
     """
