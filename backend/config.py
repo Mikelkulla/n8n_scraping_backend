@@ -74,7 +74,7 @@ class Config:
     SECRET_KEY = os.urandom(24)
 
     # Scraping settings
-    MAX_THREADS = int(os.getenv("MAX_THREADS", 5))  # Max threads for concurrent scraping
+    MAX_THREADS = int(os.getenv("MAX_THREADS", 10))  # Max threads for concurrent scraping
 
     # Ensure directories exist
     @staticmethod

@@ -3,7 +3,11 @@ from .sitemap_parser import get_robots_txt_urls, get_urls_from_sitemap
 from .page_scraper import scrape_page
 from ..selenium.webdriver_manager import WebDriverManager
 from config.job_functions import write_progress, check_stop_signal
+from backend.config import Config
 import logging
+import concurrent.futures
+import threading
+from itertools import repeat
 
 def sort_urls_by_email_likelihood(urls):
     """
@@ -53,7 +57,7 @@ class EmailScraper:
     """
     A class to orchestrate email scraping from a website.
     """
-    def __init__(self, job_id, step_id, base_url, max_pages=10, use_tor=False, headless=False, sitemap_limit=10):
+    def __init__(self, job_id, step_id, base_url, max_pages=10, use_tor=False, headless=False, sitemap_limit=10, max_threads=Config.MAX_THREADS):
         self.job_id = job_id
         self.step_id = step_id
         self.base_url = base_url
@@ -61,12 +65,15 @@ class EmailScraper:
         self.use_tor = use_tor
         self.headless = headless
         self.sitemap_limit = sitemap_limit
+        self.max_threads = max_threads
         self.manager = None
         self.driver = None
         self.all_emails = set()
         self.visited_urls = set()
         self.urls_to_visit = [self.base_url]
         self.total_urls = 0
+        self.lock = threading.Lock()
+        self.progress_counter = 0
 
     def _setup_driver(self):
         """Initializes the Selenium WebDriver."""
@@ -107,21 +114,41 @@ class EmailScraper:
         self.total_urls = min(len(self.urls_to_visit), self.max_pages)
         logging.info(f"Total URLs to visit after filtering and sorting for job {self.job_id}: {self.total_urls}")
 
+    def _scrape_worker(self, url):
+        """Worker function for scraping a single URL."""
+        if check_stop_signal(self.step_id):
+            return
+        
+        with self.lock:
+            if url in self.visited_urls or len(self.visited_urls) >= self.max_pages:
+                return
+
+        thread_manager = WebDriverManager(use_tor=self.use_tor, headless=self.headless)
+        driver = thread_manager.get_driver()
+        if not driver:
+            logging.error(f"Failed to get driver for thread on job {self.job_id}")
+            return
+
+        try:
+            emails = scrape_page(driver, url)
+            with self.lock:
+                if len(self.visited_urls) < self.max_pages:
+                    self.visited_urls.add(url)
+                    self.all_emails.update(emails)
+                    self.progress_counter += 1
+                    logging.info(f"Scraped page {self.progress_counter}/{self.total_urls} for job {self.job_id}: {url}")
+                    write_progress(self.job_id, self.step_id, self.base_url, self.max_pages, self.use_tor, self.headless, status="running", current_row=self.progress_counter, total_rows=self.total_urls)
+        finally:
+            thread_manager.close()
+
     def _scrape_pages(self):
-        """Iterates through URLs and scrapes them for emails."""
+        """Iterates through URLs and scrapes them for emails using multiple threads."""
         write_progress(self.job_id, self.step_id, self.base_url, self.max_pages, self.use_tor, self.headless, status="running", current_row=0, total_rows=self.total_urls)
 
-        for i, url in enumerate(self.urls_to_visit[:self.max_pages], 1):
-            if check_stop_signal(self.step_id):
-                logging.info(f"Stop signal detected for job {self.job_id}")
-                write_progress(self.job_id, self.step_id, self.base_url, self.max_pages, self.use_tor, self.headless, status="stopped", stop_call=True, current_row=i-1, total_rows=self.total_urls)
-                break
-            
-            scrape_page(self.driver, url, self.max_pages, self.visited_urls, self.all_emails)
-            logging.info(f"Scraped page {i}/{self.total_urls} for job {self.job_id}: {url}")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_threads) as executor:
+            # Use list to ensure all futures are created before waiting
+            futures = list(executor.map(self._scrape_worker, self.urls_to_visit[:self.max_pages]))
 
-            write_progress(self.job_id, self.step_id, self.base_url, self.max_pages, self.use_tor, self.headless, status="running", current_row=i, total_rows=self.total_urls)
-        
         if not check_stop_signal(self.step_id):
             write_progress(self.job_id, self.step_id, self.base_url, self.max_pages, self.use_tor, self.headless, status="completed", total_rows=self.total_urls)
 
@@ -151,9 +178,9 @@ class EmailScraper:
         finally:
             self._cleanup()
 
-def scrape_emails(job_id, step_id, base_url, max_pages=10, use_tor=False, headless=False, sitemap_limit=10):
+def scrape_emails(job_id, step_id, base_url, max_pages=10, use_tor=False, headless=False, sitemap_limit=10, max_threads=Config.MAX_THREADS):
     """
     Orchestrates email scraping by using the EmailScraper class.
     """
-    scraper = EmailScraper(job_id, step_id, base_url, max_pages, use_tor, headless, sitemap_limit)
+    scraper = EmailScraper(job_id, step_id, base_url, max_pages, use_tor, headless, sitemap_limit, max_threads)
     return scraper.run()
