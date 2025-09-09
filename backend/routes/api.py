@@ -145,7 +145,7 @@ def google_maps_scrape():
         write_progress(job_id, step_id, input=f"{place_type}:{location}", status="running", total_rows=max_places)
 
         # Start Google Maps scraping in a separate thread
-        def scrape_task(max_places):
+        def scrape_task():
             try:
                 logging.info(f"Starting Google Maps scrape job {job_id} for location: {location}")
                 leads = call_google_places_api(job_id, step_id, location, radius, place_type, max_places)
@@ -156,16 +156,17 @@ def google_maps_scrape():
                 with open(result_file, "w") as f:
                     json.dump({"job_id": job_id, "input": f"{place_type}:{location}", "leads": leads}, f, indent=2)
 
-                max_places = min(len(leads), max_places)
-                write_progress(job_id, step_id, input=None, status="completed", total_rows=max_places)
-                logging.info(f"Google Maps scrape job {job_id} completed. Found {len(leads)} leads.")
+                # Use the actual number of leads found for progress update
+                final_lead_count = len(leads)
+                write_progress(job_id, step_id, input=None, status="completed", total_rows=final_lead_count)
+                logging.info(f"Google Maps scrape job {job_id} completed. Found {final_lead_count} leads.")
             except Exception as e:
                 logging.error(f"Google Maps scrape job {job_id} failed: {e}")
                 write_progress(job_id, step_id, input=f"{place_type}:{location}", status="failed", stop_call=True, error_message=str(e))
             finally:
                 active_jobs.pop(job_id, None)
 
-        start_job_thread(job_id, step_id, scrape_task(max_places))
+        start_job_thread(job_id, step_id, scrape_task)
         return jsonify({"job_id": job_id, "status": "started", "input": location}), 202
 
     except Exception as e:

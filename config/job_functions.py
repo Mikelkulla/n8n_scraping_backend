@@ -6,7 +6,7 @@ from backend.config import Config
 from backend.database import Database
 
 # Modifying the job processes in the Database. (New Logic)
-def write_progress(job_id, step_id, input, max_pages=None, use_tor=None, headless=None, status=None, stop_call=False, current_row=None, total_rows=None, error_message=None):
+def write_progress(job_id, step_id, input, max_pages=None, use_tor=None, headless=None, status=None, stop_call=False, current_row=None, total_rows=None, error_message=None, db_connection=None):
     """
     Write processing progress to the SQLite database for a specific step and job.
 
@@ -21,23 +21,29 @@ def write_progress(job_id, step_id, input, max_pages=None, use_tor=None, headles
         stop_call (bool): Whether this is a stop signal.
         current_row (int): Current row or page being processed (1-based index).
         total_rows (int): Total number of rows or pages to process.
+        db_connection (Database, optional): Existing database connection.
 
     Returns:
         None
     """
     if status is None:
-        status = 'stopped' if stop_call else ("completed" if current_row >= total_rows else "running")
+        status = 'stopped' if stop_call else ("completed" if current_row is not None and total_rows is not None and current_row >= total_rows else "running")
     
+    def _write_to_db(db):
+        # Check if a record exists for this job_id and step_id
+        if db.get_job_execution(job_id, step_id):
+            # Update only specific fields
+            db.update_job_execution(job_id, step_id, current_row=current_row, total_rows=total_rows, status=status, stop_call=stop_call, error_message=error_message)
+        else:
+            # Insert a new record with all fields
+            db.insert_job_execution(job_id, step_id, input, max_pages, use_tor, headless, status, stop_call, error_message, current_row, total_rows)
     try:
-        with Database() as db:
-            # Check if a record exists for this job_id and step_id
-            if db.get_job_execution(job_id, step_id):
-                # Update only specific fields
-                db.update_job_execution(job_id, step_id, current_row=current_row, total_rows=total_rows, status=status, stop_call=stop_call, error_message=error_message)
-            else:
-                # Insert a new record with all fields
-                db.insert_job_execution(job_id, step_id, input, max_pages, use_tor, headless, status, stop_call, error_message, current_row, total_rows)
-
+        if db_connection:
+            _write_to_db(db_connection)
+        else:
+            with Database() as db:
+                _write_to_db(db)
+                
         update_job_status(step_id, job_id, status)
         logging.info(f"Progress updated for job {job_id} ({step_id}): input {input}, row {current_row}/{total_rows}, status: {status}")
     except Exception as e:

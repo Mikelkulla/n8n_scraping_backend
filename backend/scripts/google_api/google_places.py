@@ -273,7 +273,7 @@ def call_google_places_api(job_id, step_id, location, radius=300, place_type="lo
                             website=lead_data["website"]
                         )
                         logging.info(f"Stored lead for place {lead_data['name']} (job_id: {job_id})")
-                    write_progress(job_id, step_id, input=f"{place_type}:{location}", current_row=count + 1, total_rows=total_rows)
+                    write_progress(job_id, step_id, input=f"{place_type}:{location}", current_row=count + 1, total_rows=total_rows, db_connection=db)
                     count += 1
 
                 next_page_token = data.get("nextPageToken")
