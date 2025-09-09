@@ -63,7 +63,7 @@ def start_scrape():
         step_id = "email_scrape"
 
         # Initialize progress in database
-        write_progress(job_id, step_id, input=url, status="running")
+        write_progress(job_id, step_id, input=url, status="running", use_tor=use_tor, headless=headless)
 
         # Start scraping in a separate thread
         def scrape_task():
