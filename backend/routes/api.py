@@ -33,18 +33,22 @@ def start_job_thread(job_id, step_id, task):
 @api_bp.route("/scrape/website-emails", methods=["POST"])
 def start_scrape():
     """
-    Start an email scraping job for a given URL.
+    Start an email scraping job for a given URL and return the results directly.
 
     Request Body:
         - url (str): The base URL to scrape (e.g., "https://example.com").
         - max_pages (int, optional): Maximum number of pages to scrape.
         - use_tor (bool, optional): Whether to use Tor for scraping.
         - headless (bool, optional): Whether to run WebDriver in headless mode.
-        - sitemap_limit (int, optional): Max number of sub-sitemaps to scrape 
+        - sitemap_limit (int, optional): Max number of sub-sitemaps to scrape.
         
     Returns:
-        JSON response with job_id and status.
+        JSON response with job_id, status, and scraped emails.
     """
+    job_id = str(uuid.uuid4())
+    step_id = "email_scrape"
+    url = None  # Initialize url to None
+
     try:
         data = request.get_json()
         if not data or "url" not in data:
@@ -54,61 +58,48 @@ def start_scrape():
         if error:
             return jsonify({"error": error}), 400
 
-        max_pages = data.get("max_pages")  # Allow None
-        use_tor = data.get("use_tor")  # Allow None
-        headless = data.get("headless")  # Allow None
-        sitemap_limit = data.get("sitemap_limit", 10) # default to 10
+        max_pages = data.get("max_pages")
+        use_tor = data.get("use_tor")
+        headless = data.get("headless")
+        sitemap_limit = data.get("sitemap_limit", 10)
 
-        job_id = str(uuid.uuid4())
-        step_id = "email_scrape"
-
-        # Initialize progress in database
+        # Initialize progress in the database
         write_progress(job_id, step_id, input=url, status="running", use_tor=use_tor, headless=headless)
 
-        # Start scraping in a separate thread
-        def scrape_task():
-            try:
-                logging.info(f"Starting scrape job {job_id} for URL: {url}")
-                emails = scrape_emails(job_id, step_id, url, max_pages=max_pages, use_tor=use_tor, headless=headless, sitemap_limit=sitemap_limit)
+        logging.info(f"Starting synchronous scrape job {job_id} for URL: {url}")
+        
+        # Run scraping synchronously
+        emails = scrape_emails(
+            job_id,
+            step_id,
+            url,
+            max_pages=max_pages,
+            use_tor=use_tor,
+            headless=headless,
+            sitemap_limit=sitemap_limit
+        )
 
-                # Prepare the result dictionary
-                result = {"job_id": job_id, "input": url, "emails": emails}
-
-                # Save results to a single file
-                result_file = os.path.join(Config.TEMP_PATH, f"results_{step_id}.json")
-                os.makedirs(Config.TEMP_PATH, exist_ok=True)
-                
-                # Read existing results, append new result, and write back
-                try:
-                    with open(result_file, "r") as f:
-                        data = json.load(f)
-                        if not isinstance(data, list):
-                            data = [data]  # Convert to list if it's a single dict
-                except (FileNotFoundError, json.JSONDecodeError):
-                    data = []  # Initialize as empty list if file doesn't exist or is empty
-
-                # Append new result
-                data.append(result)
-
-                # Write the updated list back to the file
-                with open(result_file, "w") as f:
-                    json.dump(data, f, indent=2)
-                logging.info(f"Scrape job {job_id} completed. Found {len(emails)} emails.")
-            except Exception as e:
-                logging.error(f"Scrape job {job_id} failed: {e}")
-                write_progress(job_id, step_id, input=url, max_pages=max_pages, use_tor=use_tor, headless=headless, status="failed", stop_call=True, error_message=str(e), current_row=None, total_rows=max_pages)
-            finally:
-                active_jobs.pop(job_id, None)
-
-        start_job_thread(job_id, step_id, scrape_task)
-        return jsonify({"job_id": job_id, "status": "started", "input": url}), 202
+        logging.info(f"Scrape job {job_id} completed. Found {len(emails)} emails.")
+        
+        # Return results directly in the response
+        return jsonify({
+            "job_id": job_id,
+            "input": url,
+            "emails": emails,
+            "status": "completed"
+        }), 200
 
     except Exception as e:
-        logging.error(f"Error starting scrape job: {e}")
-        job_id = job_id if 'job_id' in locals() else str(uuid.uuid4())
-        step_id = "email_scrape"
-        write_progress(job_id, step_id, input=url if 'url' in locals() else "unknown", max_pages=None, use_tor=None, headless=None, status="failed", stop_call=True, error_message=str(e), current_row=None, total_rows=None)
-        return jsonify({"error": str(e)}), 500
+        logging.error(f"Scrape job {job_id} failed: {e}")
+        # Ensure progress is updated to "failed"
+        write_progress(
+            job_id,
+            step_id,
+            input=url if url else "unknown",
+            status="failed",
+            error_message=str(e)
+        )
+        return jsonify({"error": str(e), "job_id": job_id}), 500
 
 @api_bp.route("/scrape/google-maps", methods=["POST"])
 def google_maps_scrape():
@@ -215,7 +206,7 @@ def get_progress(job_id):
 @api_bp.route("/stop/<job_id>", methods=["POST"])
 def stop_scrape(job_id):
     """
-    Stop a running scraping job.
+    Stop a running scraping job, works for both sync and async jobs.
 
     Args:
         job_id (str): The unique job ID.
@@ -224,49 +215,60 @@ def stop_scrape(job_id):
         JSON response indicating success or failure.
     """
     try:
-        if job_id not in active_jobs:
-            return jsonify({"error": f"Job {job_id} not found or already stopped"}), 404
-
+        step_id = None
         with Database() as db:
-            # Try both possible step_ids
-            step_id = None
-            progress = None
+            # Check which type of job this is by looking it up in the database
             for possible_step_id in ["email_scrape", "google_maps_scrape"]:
-                progress = db.get_job_execution(job_id, possible_step_id)
-                if progress:
+                if db.get_job_execution(job_id, possible_step_id):
                     step_id = possible_step_id
                     break
+        
+        if not step_id:
+            # If job is not in the database, it cannot be stopped.
+            # Also check active_jobs for async jobs that might not have hit the DB yet.
+            if job_id not in active_jobs:
+                return jsonify({"error": f"Job {job_id} not found or not running"}), 404
+            # If it's in active_jobs, we can infer the step_id, but this is less robust.
+            # For now, we rely on the DB record.
+        
+        # Async jobs (google_maps_scrape) must be in active_jobs to be running.
+        # Sync jobs (email_scrape) will not be in active_jobs.
+        if step_id == "google_maps_scrape" and job_id not in active_jobs:
+            return jsonify({"error": f"Job {job_id} is not running or already stopped"}), 404
 
-            if not step_id or not progress:
-                return jsonify({"error": f"Job {job_id} not found in database"}), 404
+        # Create the stop signal file. The scraping loops check for this file.
+        stop_file = os.path.join(Config.TEMP_PATH, f"stop_{step_id}.txt")
+        os.makedirs(Config.TEMP_PATH, exist_ok=True)
+        with open(stop_file, "w") as f:
+            f.write("stop")
+        logging.info(f"Stop signal file created for job {job_id} (step: {step_id}).")
 
-            # Create stop signal file
-            stop_file = os.path.join(Config.TEMP_PATH, f"stop_{step_id}.txt")
-            os.makedirs(Config.TEMP_PATH, exist_ok=True)
-            with open(stop_file, "w") as f:
-                f.write("stop")
-
-            # Update progress to stopped
+        # Update job status in the database to "stopped"
+        with Database() as db:
             progress = db.get_job_execution(job_id, step_id)
-            if progress:
+            if progress and progress["status"] == "running":
                 write_progress(
                     job_id=job_id,
                     step_id=step_id,
+                    status="stopped",
+                    stop_call=True,
+                    # Carry over existing details
                     input=progress["input"],
                     max_pages=progress["max_pages"],
                     use_tor=progress["use_tor"],
                     headless=progress["headless"],
-                    status="stopped",
-                    stop_call=True,
                     current_row=progress["current_row"],
                     total_rows=progress["total_rows"]
                 )
-        
-        # Wait for the thread to finish
-        active_jobs[job_id].join(timeout=10)
-        active_jobs.pop(job_id, None)
 
-        logging.info(f"Scrape job {job_id} stopped.")
+        # For async jobs, which are in active_jobs, wait for the thread to terminate.
+        if job_id in active_jobs:
+            thread = active_jobs.get(job_id)
+            if thread:
+                thread.join(timeout=10)
+                active_jobs.pop(job_id, None)
+                logging.info(f"Asynchronous job {job_id} thread joined and removed.")
+
         return jsonify({"job_id": job_id, "status": "stopped"}), 200
 
     except Exception as e:
@@ -364,7 +366,7 @@ def scrape_leads_emails():
             # Validate and normalize website URL
             website, error = validate_url(website)
             if error:
-                logging.error(f"Invalid website URL for lead {lead.get('lead_id', 'unknown')}: {error}")
+                logging.info(f"Invalid website URL for lead {lead.get('lead_id', 'unknown')}: {error}")
                 try:
                     with Database() as db:
                         db.update_lead(
@@ -394,85 +396,57 @@ def scrape_leads_emails():
                 "headless": headless
             }
             try:
-                response = requests.post(f"{base_url}/scrape/website-emails", json=scrape_payload)
-                if response.status_code != 202:
-                    logging.error(f"Failed to start scrape job for {website}: {response.json()}")
-                    results.append({
-                        "lead_id": lead.get("lead_id", "unknown"),
-                        "website": website,
-                        "job_id": None,
-                        "status": "failed",
-                        "emails": [],
-                        "error": f"Scrape job initiation failed: {response.json().get('error')}"
-                    })
-                    continue
-
+                # The /scrape/website-emails endpoint is now synchronous and returns results directly
+                response = requests.post(f"{base_url}/scrape/website-emails", json=scrape_payload, timeout=300) # 5-minute timeout
+                
                 job_data = response.json()
-                job_id = job_data["job_id"]
-                logging.info(f"Started scrape job {job_id} for {website}")
+                job_id = job_data.get("job_id")
+                status = job_data.get("status")
 
-                # Poll job progress
-                progress_result = poll_job_progress(base_url, job_id)
-                status = progress_result["status"]
-                error = progress_result["error"]
-
-                if status != "completed":
+                if response.status_code != 200 or status != "completed":
+                    error_message = job_data.get("error", "Scrape job did not complete successfully")
+                    logging.error(f"Failed to scrape emails for {website}: {error_message}")
                     results.append({
                         "lead_id": lead.get("lead_id", "unknown"),
                         "website": website,
                         "job_id": job_id,
-                        "status": status,
+                        "status": status or "failed",
                         "emails": [],
-                        "error": error or "Job did not complete successfully"
+                        "error": error_message
                     })
                     continue
 
-                # Read job results
-                result_file = os.path.join(Config.TEMP_PATH, "results_email_scrape.json")
-                job_result = read_job_results(result_file, job_id)
-                emails = job_result["emails"]
-                if job_result["error"]:
-                    results.append({
-                        "lead_id": lead.get("lead_id", "unknown"),
-                        "website": website,
-                        "job_id": job_id,
-                        "status": status,
-                        "emails": [],
-                        "error": job_result["error"]
-                    })
-                    continue
-                # Validate emails
-                emails = validate_emails(emails)
+                logging.info(f"Scrape job {job_id} for {website} completed.")
+                
+                # Get emails from the response and validate them
+                emails = validate_emails(job_data.get("emails", []))
 
                 # Update the database with the emails
                 try:
                     with Database() as db:
-                        emails_str = ','.join(emails) if emails else None  # Convert to string or None
+                        emails_str = ','.join(emails) if emails else None
                         db.update_lead(
-                            job_id=lead['job_id'], 
-                            place_id=lead['place_id'], 
-                            emails=emails_str, 
+                            job_id=lead['job_id'],
+                            place_id=lead['place_id'],
+                            emails=emails_str,
                             status='scraped'
-                            )
-
-                        logging.info(f"Updated emails in DB for lead {lead['lead_id']} (place_id: {lead['place_id']})")
-                        results.append(
-                            {
+                        )
+                        logging.info(f"Updated emails in DB for lead {lead['lead_id']}")
+                        results.append({
                             "lead_id": lead.get("lead_id", "unknown"),
                             "website": website,
                             "job_id": job_id,
-                            "status": status,
+                            "status": "completed",
                             "emails": emails,
                             "error": None if emails else "No valid emails found"
-                            }
-                        )
+                        })
                 except Exception as db_err:
                     logging.error(f"Failed to update DB for lead {lead['lead_id']}: {db_err}")
                     results.append({
                         "lead_id": lead.get("lead_id", "unknown"),
                         "website": website,
                         "job_id": job_id,
-                        "status": status,
+                        "status": "completed",
                         "emails": emails,
                         "error": f"Database update failed: {str(db_err)}"
                     })
