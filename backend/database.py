@@ -68,6 +68,8 @@ class Database:
                     website TEXT,
                     emails TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    status TEXT,
                     UNIQUE(job_id, place_id),
                     FOREIGN KEY (job_id) REFERENCES job_executions(job_id)
                 )
