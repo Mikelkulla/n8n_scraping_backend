@@ -6,20 +6,25 @@ from backend.config import Config
 
 
 def setup_logging(log_dir=Config.LOG_PATH, log_prefix=Config.LOG_PREFIX, max_bytes=Config.MAX_BYTES, log_level=Config.LOG_LEVEL):
-    """
-    Sets up logging with a date-based log file in the specified directory.
-    Rotates the log file when it exceeds max_bytes, appending a timestamp to the rotated file.
-    Includes the source file name in log messages for better traceability.
-    Creates the directory if it doesn't exist and falls back to the current directory if there's an error.
+    """Configures logging for the application.
 
-    Parameters:
-        log_dir (str): Directory to save the log file.
-        log_prefix (str): Prefix for the log file name.
-        max_bytes (int): Maximum file size in bytes before rotation (default: 100MB).
-        log_level (str): The logging level (e.g., "INFO", "DEBUG").
+    This function sets up a rotating file handler that creates a new log file
+    daily. When a log file exceeds the specified maximum size, it is rotated,
+    and the old file is renamed with a timestamp. It also configures log levels
+    for the application and specific libraries.
 
-    Returns:
-        None
+    If the primary log directory cannot be created or written to, it falls back
+    to using the current working directory.
+
+    Args:
+        log_dir (str, optional): The directory where log files will be stored.
+            Defaults to `Config.LOG_PATH`.
+        log_prefix (str, optional): The prefix for log file names. Defaults to
+            `Config.LOG_PREFIX`.
+        max_bytes (int, optional): The maximum size in bytes for a log file
+            before it is rotated. Defaults to `Config.MAX_BYTES`.
+        log_level (str, optional): The minimum log level to record (e.g., "INFO",
+            "DEBUG"). Defaults to `Config.LOG_LEVEL`.
     """
     # Create date-based log file name (e.g., logprefix_24_08_2025.log)
     date_str = datetime.now().strftime("%d_%m_%Y")
@@ -37,7 +42,20 @@ def setup_logging(log_dir=Config.LOG_PATH, log_prefix=Config.LOG_PREFIX, max_byt
 
     # Custom RotatingFileHandler to rename rotated files with end timestamp
     class TimestampedRotatingFileHandler(RotatingFileHandler):
+        """A rotating file handler that appends a timestamp to log files on rotation.
+
+        This custom handler overrides the default rotation behavior to rename the
+        old log file with a timestamp of when the rotation occurred, rather than
+        using a simple numeric index.
+        """
         def doRollover(self):
+            """Performs the log file rotation.
+
+            This method is called when the current log file exceeds its maximum
+            size. It closes the current file, renames it with a timestamp
+            (e.g., 'log_file_HH_MM_SS.log'), and opens a new log file for
+            subsequent messages.
+            """
             # First, close the existing stream to release the file handle.
             if self.stream:
                 self.stream.close()

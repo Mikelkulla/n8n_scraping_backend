@@ -5,15 +5,17 @@ import logging
 import re
 
 def fetch_content_with_driver(driver, url):
-    """
-    Fetch content of a URL using WebDriver to avoid 403 errors.
-    
+    """Fetches the source content of a URL using a Selenium WebDriver.
+
+    This function is used to retrieve page content, especially for pages that
+    might block standard HTTP requests, by simulating a real browser visit.
+
     Args:
-        driver (WebDriver): Selenium WebDriver instance.
-        url (str): URL to fetch.
-    
+        driver: The Selenium WebDriver instance.
+        url (str): The URL of the page to fetch.
+
     Returns:
-        str: Content of the page, or empty string if fetch fails.
+        str: The page source content, or an empty string if the fetch fails.
     """
     try:
         driver.get(url)
@@ -26,15 +28,17 @@ def fetch_content_with_driver(driver, url):
         return ""
 
 def get_robots_txt_urls(driver, base_url):
-    """
-    Fetch robots.txt and extract sitemap URLs using WebDriver.
-    
+    """Fetches and parses a website's robots.txt file to find sitemap URLs.
+
+    This function constructs the URL for the robots.txt file from a base URL,
+    retrieves its content, and parses it to extract any listed sitemap URLs.
+
     Args:
-        driver (WebDriver): Selenium WebDriver instance.
-        base_url (str): Base URL of the website.
-    
+        driver: The Selenium WebDriver instance.
+        base_url (str): The base URL of the website (e.g., "https://example.com").
+
     Returns:
-        list: List of sitemap URLs found in robots.txt.
+        list[str]: A list of sitemap URLs found in the robots.txt file.
     """
     robots_url = urljoin(base_url, "/robots.txt")
     logging.info(f"Fetching robots.txt from: {robots_url}")
@@ -68,20 +72,25 @@ def get_robots_txt_urls(driver, base_url):
     return sitemap_urls
 
 def parse_embedded_xml_sitemap(content, sitemap_url, driver, depth, max_depth, visited_sitemaps, sitemap_limit=10):
-    """
-    Parse embedded XML content within HTML (e.g., inside <div id="webkit-xml-viewer-source-xml">).
-    
+    """Parses a sitemap that is embedded as XML within an HTML document.
+
+    Some web servers or browsers render XML files within an HTML viewer. This
+    function is designed to extract the raw XML from such renderings and then
+    parse it to find URLs.
+
     Args:
-        content (str): HTML content containing embedded XML.
-        sitemap_url (str): URL of the sitemap page.
-        driver (WebDriver): Selenium WebDriver instance.
-        depth (int): Current recursion depth.
-        max_depth (int): Maximum recursion depth.
-        visited_sitemaps (set): Set of sitemap URLs already processed.
-        sitemap_limit (int): Maximum number of sitemaps to process per depth.
-    
+        content (str): The HTML page source containing the embedded XML.
+        sitemap_url (str): The original URL of the sitemap.
+        driver: The Selenium WebDriver instance.
+        depth (int): The current recursion depth for sitemap parsing.
+        max_depth (int): The maximum allowed recursion depth.
+        visited_sitemaps (set[str]): A set of sitemap URLs that have already been
+            processed to avoid loops.
+        sitemap_limit (int, optional): The max number of child sitemaps to parse.
+            Defaults to 10.
+
     Returns:
-        list: List of page URLs extracted from the embedded XML.
+        list[str]: A list of page URLs extracted from the sitemap.
     """
     try:
         soup = BeautifulSoup(content, 'html.parser')
@@ -137,19 +146,24 @@ def parse_embedded_xml_sitemap(content, sitemap_url, driver, depth, max_depth, v
         return []
 
 def get_urls_from_sitemap(driver, sitemap_url, depth=0, max_depth=2, visited_sitemaps=None, sitemap_limit=10):
-    """
-    Parse sitemap XML or HTML using WebDriver and extract URLs, supporting sitemap indexes.
-    
+    """Recursively parses a sitemap to extract all page URLs.
+
+    This function can handle XML sitemaps, sitemap indexes (which link to other
+    sitemaps), and HTML pages that contain sitemap links. It gracefully handles
+    different formats and prevents infinite loops by tracking visited sitemaps.
+
     Args:
-        driver (WebDriver): Selenium WebDriver instance.
-        sitemap_url (str): URL of the sitemap.
-        depth (int): Current recursion depth.
-        max_depth (int): Maximum recursion depth.
-        visited_sitemaps (set): Set of sitemap URLs already processed.
-        sitemap_limit (int): Maximum number of sitemaps to process per depth.
-    
+        driver: The Selenium WebDriver instance.
+        sitemap_url (str): The URL of the sitemap to parse.
+        depth (int, optional): The current recursion depth. Defaults to 0.
+        max_depth (int, optional): The maximum recursion depth. Defaults to 2.
+        visited_sitemaps (set[str], optional): A set of already visited sitemap
+            URLs. Defaults to None.
+        sitemap_limit (int, optional): The max number of child sitemaps to parse
+            from an index. Defaults to 10.
+
     Returns:
-        list: List of page URLs extracted from the sitemap.
+        list[str]: A list of all page URLs found in the sitemap and its children.
     """
     if visited_sitemaps is None:
         visited_sitemaps = set()
@@ -230,20 +244,24 @@ def get_urls_from_sitemap(driver, sitemap_url, depth=0, max_depth=2, visited_sit
         return []
 
 def parse_html_sitemap(content, sitemap_url, driver, depth, max_depth, visited_sitemaps, sitemap_limit=10):
-    """
-    Parse HTML sitemap page to extract sitemap URLs and page URLs.
-    
+    """Parses an HTML page that serves as a sitemap.
+
+    This function is a fallback for when a sitemap URL leads to an HTML page
+    instead of an XML file. It looks for links within tables, a common format
+    for HTML sitemaps, and extracts both page URLs and links to other sitemaps.
+
     Args:
-        content (str): HTML content of the sitemap page.
-        sitemap_url (str): URL of the sitemap page.
-        driver (WebDriver): Selenium WebDriver instance.
-        depth (int): Current recursion depth.
-        max_depth (int): Maximum recursion depth.
-        visited_sitemaps (set): Set of sitemap URLs already processed.
-        sitemap_limit (int): Maximum number of sitemaps to process per depth.
-    
+        content (str): The HTML content of the sitemap page.
+        sitemap_url (str): The URL of the HTML sitemap page.
+        driver: The Selenium WebDriver instance.
+        depth (int): The current recursion depth.
+        max_depth (int): The maximum allowed recursion depth.
+        visited_sitemaps (set[str]): A set of already processed sitemap URLs.
+        sitemap_limit (int, optional): The max number of child sitemaps to parse.
+            Defaults to 10.
+
     Returns:
-        list: List of page URLs extracted from the HTML sitemap.
+        list[str]: A list of page URLs extracted from the HTML sitemap.
     """
     try:
         soup = BeautifulSoup(content, 'html.parser')

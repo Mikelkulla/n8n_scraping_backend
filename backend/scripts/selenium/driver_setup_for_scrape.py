@@ -1,1 +1,0 @@
-# Deprecated because it is refactored in the webdriver_manager.py file

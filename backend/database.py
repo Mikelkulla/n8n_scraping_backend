@@ -5,9 +5,26 @@ import threading
 from backend.config import Config
 
 class Database:
+    """Manages the application's SQLite database connection and operations.
+
+    This class provides a thread-safe interface for all database interactions,
+    including initializing the database schema, inserting and updating job
+    and lead records. It can be used as a context manager to automatically
+    handle connection and transaction management.
+
+    Attributes:
+        db_path (str): The file path to the SQLite database.
+    """
     _lock = threading.RLock()
 
     def __init__(self, db_path=None):
+        """Initializes the Database instance and sets up the database schema.
+
+        Args:
+            db_path (str, optional): The path to the database file. If not
+                provided, it defaults to 'scraping.db' in the temporary
+                directory defined in `Config`.
+        """
         if db_path is None:
             self.db_path = os.path.join(Config.TEMP_PATH, "scraping.db")
         else:
@@ -83,6 +100,14 @@ class Database:
                 conn.close()
 
     def __enter__(self):
+        """Opens a database connection and returns the instance.
+
+        This method is called when entering a `with` statement. It acquires a
+        thread lock and establishes a connection to the database.
+
+        Returns:
+            Database: The current instance with an active connection.
+        """
         Database._lock.acquire()
         self.conn = sqlite3.connect(self.db_path, timeout=10.0)
         self.conn.row_factory = sqlite3.Row
@@ -90,6 +115,11 @@ class Database:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        """Closes the database connection and releases the lock.
+
+        This method is called when exiting a `with` statement. It commits any
+        successful transactions or rolls back in case of an exception.
+        """
         if self.conn:
             if exc_type is None:
                 self.conn.commit()
@@ -100,6 +130,21 @@ class Database:
         Database._lock.release()
 
     def insert_job_execution(self, job_id, step_id, input, max_pages=None, use_tor=None, headless=None, status=None, stop_call=False, error_message=None, current_row=None, total_rows=None):
+        """Inserts or replaces a job execution record in the database.
+
+        Args:
+            job_id (str): The unique identifier for the job.
+            step_id (str): The identifier for the specific task.
+            input (str): The primary input for the job (e.g., URL).
+            max_pages (int, optional): Max pages to scrape. Defaults to None.
+            use_tor (bool, optional): Whether Tor was used. Defaults to None.
+            headless (bool, optional): Whether browser was headless. Defaults to None.
+            status (str, optional): The job's status. Defaults to None.
+            stop_call (bool, optional): If a stop was signaled. Defaults to False.
+            error_message (str, optional): Error message if any. Defaults to None.
+            current_row (int, optional): The current progress counter. Defaults to None.
+            total_rows (int, optional): The total items to process. Defaults to None.
+        """
         try:
             self.cursor.execute("""
                 INSERT OR REPLACE INTO job_executions (
@@ -112,6 +157,20 @@ class Database:
             logging.error(f"Failed to insert/update execution for job {job_id}: {e}")
 
     def update_job_execution(self, job_id, step_id, current_row=None, total_rows=None, status=None, error_message=None, stop_call=None):
+        """Updates an existing job execution record.
+
+        This method dynamically builds an SQL UPDATE statement to modify only the
+        provided fields of a job record.
+
+        Args:
+            job_id (str): The unique identifier for the job.
+            step_id (str): The identifier for the specific task.
+            current_row (int, optional): The new progress counter. Defaults to None.
+            total_rows (int, optional): The new total items. Defaults to None.
+            status (str, optional): The new status. Defaults to None.
+            error_message (str, optional): The new error message. Defaults to None.
+            stop_call (bool, optional): The new stop signal status. Defaults to None.
+        """
         try:
             set_clauses = []
             params = []
@@ -149,6 +208,16 @@ class Database:
             logging.error(f"Failed to update execution for job {job_id}: {e}")
 
     def get_job_execution(self, job_id, step_id):
+        """Retrieves a job execution record from the database.
+
+        Args:
+            job_id (str): The unique identifier for the job.
+            step_id (str): The identifier for the specific task.
+
+        Returns:
+            dict | None: A dictionary representing the job record if found,
+            otherwise None.
+        """
         try:
             self.cursor.execute("""
                 SELECT * FROM job_executions WHERE job_id = ? AND step_id = ?
@@ -160,6 +229,16 @@ class Database:
             return None
 
     def get_leads(self, status_filter=None):
+        """Retrieves lead records from the database.
+
+        Args:
+            status_filter (str, optional): A filter to apply to the lead status.
+                If "NOT scraped", it retrieves leads that have not yet been
+                processed. Defaults to None.
+
+        Returns:
+            list[dict]: A list of dictionaries, where each dictionary represents a lead.
+        """
         try:
             query = "SELECT * FROM leads WHERE website IS NOT NULL"
             if status_filter == "NOT scraped":
@@ -172,6 +251,18 @@ class Database:
             return []
 
     def insert_lead(self, job_id, place_id, location=None, name=None, address=None, phone=None, website=None, emails=None):
+        """Inserts or replaces a lead record in the database.
+
+        Args:
+            job_id (str): The identifier of the job that generated this lead.
+            place_id (str): The unique identifier for the place (e.g., from Google Maps).
+            location (str, optional): The location searched. Defaults to None.
+            name (str, optional): The name of the business. Defaults to None.
+            address (str, optional): The address of the business. Defaults to None.
+            phone (str, optional): The phone number. Defaults to None.
+            website (str, optional): The business's website. Defaults to None.
+            emails (str, optional): A comma-separated string of found emails. Defaults to None.
+        """
         try:
             self.cursor.execute("""
                 INSERT OR REPLACE INTO leads (
@@ -183,6 +274,19 @@ class Database:
             logging.error(f"Failed to insert/update lead for job {job_id}, place {place_id}: {e}")
 
     def update_lead(self, job_id, place_id, location=None, name=None, address=None, phone=None, website=None, emails=None, status=None):
+        """Updates an existing lead record in the database.
+
+        Args:
+            job_id (str): The identifier of the job associated with the lead.
+            place_id (str): The unique identifier of the place to update.
+            location (str, optional): The new location. Defaults to None.
+            name (str, optional): The new name. Defaults to None.
+            address (str, optional): The new address. Defaults to None.
+            phone (str, optional): The new phone number. Defaults to None.
+            website (str, optional): The new website. Defaults to None.
+            emails (str, optional): The new comma-separated email string. Defaults to None.
+            status (str, optional): The new status of the lead. Defaults to None.
+        """
         try:
             set_clauses = []
             params = []

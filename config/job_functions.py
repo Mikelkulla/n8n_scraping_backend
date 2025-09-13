@@ -7,24 +7,35 @@ from backend.database import Database
 
 # Modifying the job processes in the Database. (New Logic)
 def write_progress(job_id, step_id, input, max_pages=None, use_tor=None, headless=None, status=None, stop_call=False, current_row=None, total_rows=None, error_message=None, db_connection=None):
-    """
-    Write processing progress to the SQLite database for a specific step and job.
+    """Writes or updates the progress of a scraping job in the database.
+
+    This function records the state of a job, including its status (e.g., "running",
+    "completed"), progress counters, and any errors. It can handle both new and
+    existing job entries.
 
     Args:
-        job_id (str): Unique identifier for the job (e.g., UUID).
-        step_id (str): Identifier for the processing step (e.g., 'email_scrape').
-        input (str): The base URL being scraped.
-        max_pages (int): Maximum number of pages to scrape.
-        use_tor (bool): Whether to use Tor for scraping.
-        headless (bool): Whether to run WebDriver in headless mode.
-        status (str, optional): Explicit status to set (e.g., 'running', 'completed').
-        stop_call (bool): Whether this is a stop signal.
-        current_row (int): Current row or page being processed (1-based index).
-        total_rows (int): Total number of rows or pages to process.
-        db_connection (Database, optional): Existing database connection.
-
-    Returns:
-        None
+        job_id (str): The unique identifier for the job.
+        step_id (str): The identifier for the specific task or step (e.g.,
+            'email_scrape').
+        input (str): The primary input for the job, such as a URL or search query.
+        max_pages (int, optional): The maximum number of pages to be scraped.
+            Defaults to None.
+        use_tor (bool, optional): Flag indicating if the Tor network was used.
+            Defaults to None.
+        headless (bool, optional): Flag indicating if the browser ran in headless
+            mode. Defaults to None.
+        status (str, optional): The current status of the job. If None, it's
+            auto-determined based on other arguments. Defaults to None.
+        stop_call (bool, optional): Flag indicating if a stop signal has been
+            issued for the job. Defaults to False.
+        current_row (int, optional): The number of items processed so far.
+            Defaults to None.
+        total_rows (int, optional): The total number of items to process.
+            Defaults to None.
+        error_message (str, optional): A message describing an error if the job
+            failed. Defaults to None.
+        db_connection (Database, optional): An existing database connection to
+            use. If None, a new connection is created. Defaults to None.
     """
     if status is None:
         status = 'stopped' if stop_call else ("completed" if current_row is not None and total_rows is not None and current_row >= total_rows else "running")
@@ -51,13 +62,17 @@ def write_progress(job_id, step_id, input, max_pages=None, use_tor=None, headles
 
 # This function is for JSON files tracking (Old logic to be deprecated)
 def update_job_status(step_id, job_id, status):
-    """
-    Updates the status of a job in the jobs_{step_id}.json file.
-    
-    Parameters:
-        step_id (int): Step number (5, 6, or 7).
-        job_id (str): UUID of the job.
-        status (str): New status ('running', 'completed', or 'stopped').
+    """Updates the status of a job in a JSON tracking file.
+
+    Note:
+        This function is part of an older system for tracking jobs and is planned
+        for deprecation. Job status is primarily managed in the database.
+
+    Args:
+        step_id (str): The identifier for the step (e.g., 'email_scrape').
+        job_id (str): The unique identifier of the job.
+        status (str): The new status to set (e.g., 'running', 'completed',
+            'stopped').
     """
     jobs_file = os.path.join(Config.TEMP_PATH, f"jobs_{step_id}.json")
     try:
@@ -83,14 +98,17 @@ def update_job_status(step_id, job_id, status):
         print(f"Error updating job status for step {step_id}, job {job_id}: {e}")
 
 def check_stop_signal(step_id):
-    """
-    Check if a stop signal file exists for the specified step.
+    """Checks for the existence of a stop signal file for a given step.
 
-    Parameters:
-        step_id (str): Identifier for the processing step (e.g., 'step7', 'step8').
+    The scraping process can be interrupted gracefully by placing a specific file
+    in the temporary directory. This function checks if that file exists.
+
+    Args:
+        step_id (str): The identifier for the processing step (e.g.,
+            'email_scrape').
 
     Returns:
-        bool: True if stop signal file exists, False otherwise.
+        bool: True if the stop signal file exists, False otherwise.
     """
     stop_file = os.path.join(Config.TEMP_PATH, f"stop_{step_id}.txt")
     return os.path.exists(stop_file)

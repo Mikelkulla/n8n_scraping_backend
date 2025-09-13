@@ -19,6 +19,14 @@ app.register_blueprint(api_bp, url_prefix="/api")
 
 @app.route("/")
 def index():
+    """Renders the main index page of the application.
+
+    This view function serves the primary HTML page, which acts as the
+    frontend interface for the web application.
+
+    Returns:
+        str: The rendered HTML content of the `index.html` template.
+    """
     return render_template("index.html")
 
 if __name__ == "__main__":

@@ -7,6 +7,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class Config:
+    """A central configuration class for the application.
+
+    This class holds all the settings and paths required for the application to run.
+    It includes API keys, file paths for logs and temporary data, driver
+    configurations for Selenium, and other operational parameters. Settings can
+    be overridden by environment variables.
+    """
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", None)
 
     BASE_DIR = os.path.abspath(os.path.dirname(__file__))               # Base dir of the project (backend)
@@ -74,11 +81,16 @@ class Config:
     SECRET_KEY = os.urandom(24)
 
     # Scraping settings
-    MAX_THREADS = int(os.getenv("MAX_THREADS", 10))  # Max threads for concurrent scraping
+    MAX_THREADS = int(os.getenv("MAX_THREADS", 5))  # Max threads for concurrent scraping
 
     # Ensure directories exist
     @staticmethod
     def init_dirs():
+        """Creates necessary directories for the application.
+
+        This method ensures that all required directories for logging, temporary
+        files, and browser profiles are created at startup.
+        """
         for path in [
             Config.LOG_PATH,
             Config.TEMP_PATH,            
@@ -91,7 +103,12 @@ class Config:
     
     @staticmethod
     def verify_drivers():
-        """Verify that driver executables exist."""
+        """Checks for the existence of required web driver executables.
+
+        This method verifies that the paths for ChromeDriver, GeckoDriver, and the
+        Tor executable point to existing files. It prints a warning if a driver
+        is not found.
+        """
         for driver_path in [Config.CHROMEDRIVER_PATH, Config.GECKODRIVER_PATH, Config.TOR_EXECUTABLE]:
             if driver_path and not os.path.exists(driver_path):
                 print(f"Warning: Driver not found at {driver_path}")

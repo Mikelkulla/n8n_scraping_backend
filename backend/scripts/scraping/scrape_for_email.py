@@ -10,8 +10,17 @@ import threading
 from itertools import repeat
 
 def sort_urls_by_email_likelihood(urls):
-    """
-    Sort URLs by likelihood of containing emails based on keywords and length.
+    """Sorts a list of URLs based on their likelihood of containing contact information.
+
+    This function scores URLs based on the presence of keywords like 'contact'
+    or 'about', and also considers the URL's length. Shorter URLs and those
+    with relevant keywords are ranked higher.
+
+    Args:
+        urls (list[str]): A list of URLs to be sorted.
+
+    Returns:
+        list[str]: The list of URLs sorted in descending order of likelihood.
     """
     # Keywords indicating high email likelihood
     email_keywords = [
@@ -54,10 +63,30 @@ def sort_urls_by_email_likelihood(urls):
     return sorted_urls
 
 class EmailScraper:
-    """
-    A class to orchestrate email scraping from a website.
+    """Orchestrates the process of scraping a website for email addresses.
+
+    This class manages the entire lifecycle of an email scraping job, including
+    setting up the web driver, discovering URLs through sitemaps, filtering and
+    sorting them, scraping pages concurrently, and handling cleanup.
     """
     def __init__(self, job_id, step_id, base_url, max_pages=10, use_tor=False, headless=False, sitemap_limit=10, max_threads=Config.MAX_THREADS):
+        """Initializes the EmailScraper instance.
+
+        Args:
+            job_id (str): The unique identifier for the scraping job.
+            step_id (str): The identifier for the scraping step.
+            base_url (str): The starting URL for the website to be scraped.
+            max_pages (int, optional): The maximum number of pages to scrape.
+                Defaults to 10.
+            use_tor (bool, optional): If True, use the Tor network for scraping.
+                Defaults to False.
+            headless (bool, optional): If True, run the browser in headless mode.
+                Defaults to False.
+            sitemap_limit (int, optional): The max number of sitemaps to process.
+                Defaults to 10.
+            max_threads (int, optional): The max number of concurrent threads to use.
+                Defaults to `Config.MAX_THREADS`.
+        """
         self.job_id = job_id
         self.step_id = step_id
         self.base_url = base_url
@@ -76,7 +105,11 @@ class EmailScraper:
         self.progress_counter = 0
 
     def _setup_driver(self):
-        """Initializes the Selenium WebDriver."""
+        """Initializes the Selenium WebDriver.
+
+        Raises:
+            RuntimeError: If the WebDriver fails to initialize.
+        """
         logging.info(f"Starting Chrome WebDriver for job {self.job_id}...")
         self.manager = WebDriverManager(use_tor=self.use_tor, headless=self.headless)
         self.driver = self.manager.get_driver()
@@ -85,7 +118,7 @@ class EmailScraper:
             raise RuntimeError("Failed to initialize WebDriver")
 
     def _discover_urls(self):
-        """Discovers URLs from robots.txt and sitemaps."""
+        """Discovers URLs to scrape from the website's robots.txt and sitemaps."""
         logging.info(f"Starting URL for job {self.job_id}: {self.base_url}")
         sitemap_urls = get_robots_txt_urls(self.driver, self.base_url)
         sitemap_urls.extend([
@@ -101,7 +134,7 @@ class EmailScraper:
             self.urls_to_visit.extend(urls_from_sitemap)
 
     def _filter_and_sort_urls(self):
-        """Filters URLs to the base domain and sorts them by email likelihood."""
+        """Filters discovered URLs to the base domain and sorts them by likelihood."""
         def get_base_domain(netloc):
             return netloc.lower().removeprefix("www.")
 
@@ -115,7 +148,14 @@ class EmailScraper:
         logging.info(f"Total URLs to visit after filtering and sorting for job {self.job_id}: {self.total_urls}")
 
     def _scrape_worker(self, url):
-        """Worker function for scraping a single URL."""
+        """The target function for each scraping thread.
+
+        This function scrapes a single URL for emails. It manages its own WebDriver
+        instance and updates shared state (visited URLs, found emails) using a lock.
+
+        Args:
+            url (str): The URL to be scraped by the worker.
+        """
         if check_stop_signal(self.step_id):
             return
         
@@ -142,7 +182,7 @@ class EmailScraper:
             thread_manager.close()
 
     def _scrape_pages(self):
-        """Iterates through URLs and scrapes them for emails using multiple threads."""
+        """Manages the concurrent scraping of URLs using a thread pool."""
         write_progress(self.job_id, self.step_id, self.base_url, self.max_pages, self.use_tor, self.headless, status="running", current_row=0, total_rows=self.total_urls)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_threads) as executor:
@@ -153,14 +193,19 @@ class EmailScraper:
             write_progress(self.job_id, self.step_id, self.base_url, self.max_pages, self.use_tor, self.headless, status="completed", total_rows=self.total_urls)
 
     def _cleanup(self):
-        """Closes the WebDriver."""
+        """Closes the main WebDriver instance."""
         if self.manager:
             logging.info(f"Closing WebDriver for job {self.job_id}...")
             self.manager.close()
 
     def run(self):
-        """
-        Executes the entire email scraping process.
+        """Executes the complete email scraping process.
+
+        This method orchestrates the entire scraping workflow, from setup to
+        cleanup, and returns the list of found emails.
+
+        Returns:
+            list[str]: A list of unique email addresses found during the scrape.
         """
         try:
             self._setup_driver()
@@ -179,8 +224,26 @@ class EmailScraper:
             self._cleanup()
 
 def scrape_emails(job_id, step_id, base_url, max_pages=10, use_tor=False, headless=False, sitemap_limit=10, max_threads=Config.MAX_THREADS):
-    """
-    Orchestrates email scraping by using the EmailScraper class.
+    """A convenience function to initiate an email scraping job.
+
+    This function creates an instance of the `EmailScraper` class and calls its
+    `run` method, providing a simple interface to start a scraping task.
+
+    Args:
+        job_id (str): The unique identifier for the scraping job.
+        step_id (str): The identifier for the scraping step.
+        base_url (str): The starting URL for the website to be scraped.
+        max_pages (int, optional): The maximum number of pages to scrape.
+            Defaults to 10.
+        use_tor (bool, optional): If True, use the Tor network. Defaults to False.
+        headless (bool, optional): If True, run in headless mode. Defaults to False.
+        sitemap_limit (int, optional): The max number of sitemaps to process.
+            Defaults to 10.
+        max_threads (int, optional): The max number of concurrent threads.
+            Defaults to `Config.MAX_THREADS`.
+
+    Returns:
+        list[str]: A list of unique email addresses found.
     """
     scraper = EmailScraper(job_id, step_id, base_url, max_pages, use_tor, headless, sitemap_limit, max_threads)
     return scraper.run()

@@ -11,20 +11,24 @@ from urllib.parse import urlparse
 
 
 def load_csv(input_csv, output_csv, required_columns=None):
-    """
-    Loads a CSV file for processing, using the output CSV as input if it exists.
-    Ensures the output directory exists and validates required columns.
+    """Loads a CSV file, prioritizing an existing output file over the input file.
 
-    Parameters:
-    -----------
-    input_csv (str): Path to the input CSV file.
-    output_csv (str): Path to save the updated CSV file.
-    required_columns (list, optional): List of column names that must exist in the CSV.
+    This function is designed to resume processing by loading a partially
+    completed output file if it exists. It ensures the output directory is
+    present and can validate that the CSV contains a specific set of columns.
+
+    Args:
+        input_csv (str): The path to the primary input CSV file.
+        output_csv (str): The path where the output CSV is stored. If this file
+            exists, it will be loaded instead of `input_csv`.
+        required_columns (list[str], optional): A list of column names that must
+            be present in the loaded CSV file. Defaults to None.
 
     Returns:
-    --------
-    tuple: (pd.DataFrame, str) - The loaded DataFrame and the resolved input CSV path,
-           or (None, None) if an error occurs.
+        tuple[pd.DataFrame, str] | tuple[None, None]: A tuple containing the
+        loaded DataFrame and the path of the file that was read. Returns
+        (None, None) if the file cannot be loaded or if a required column
+        is missing.
     """
     try:
         # Ensure output directory exists
@@ -60,14 +64,17 @@ def load_csv(input_csv, output_csv, required_columns=None):
         return None, None
     
 def is_non_business_domain(domain):
-    """
-    Check if the domain is a common non-business website.
-    
+    """Checks if a domain belongs to a list of common non-business websites.
+
+    This function is used to filter out domains that are typically not associated
+    with business entities, such as social media platforms and large consumer
+    services.
+
     Args:
-        domain (str): Domain to check (e.g., 'facebook.com')
-    
+        domain (str): The domain name to check (e.g., 'facebook.com').
+
     Returns:
-        bool: True if domain is a non-business website, False otherwise
+        bool: True if the domain is in the non-business list, False otherwise.
     """
     non_business_domains = [
         'airbnb.co.uk', 'airbnb.co.za', 'airbnb.com', 'airbnb.mx', 'airbnb.net',
@@ -84,16 +91,18 @@ def is_non_business_domain(domain):
     return False
 
 def extract_base_url(url):
-    """
-    Extract the base URL (e.g., https://www.domain.com) from an email address or URL,
-    removing paths and parameters.
-    
+    """Extracts and normalizes the base URL from a given URL string.
+
+    This function takes a URL, ensures it has a scheme (defaulting to 'https://'),
+    and returns the base part of the URL (scheme and domain). It also checks if
+    the domain is a known non-business domain and returns None in that case.
+
     Args:
-        email_or_url (str): Email address (e.g., 'user@sub.example.com') or URL
-                           (e.g., 'https://www.example.com/contact?param=1')
-    
+        url (str): The URL to process.
+
     Returns:
-        str: Base URL (e.g., 'https://www.example.com') or None if invalid
+        str | None: The normalized base URL (e.g., 'https://www.example.com')
+        or None if the URL is invalid or belongs to a non-business domain.
     """
     try:
         # Add scheme if missing
@@ -115,14 +124,19 @@ def extract_base_url(url):
         return None
 
 def validate_url(url):
-    """
-    Validate a URL, normalize it by adding https:// if no scheme is provided.
-    and check if the domain is a non-business domain.
+    """Validates and normalizes a URL.
+
+    This function checks if a URL is well-formed, normalizes it by adding a
+    scheme if one is missing, and verifies that it does not belong to a known
+    non-business domain.
+
     Args:
-        url (str): URL to validate.
-    
+        url (str): The URL to validate.
+
     Returns:
-        tuple: (str, str) - (Normalized base URL, error message if invalid or non-business, else None)
+        tuple[str, str] | tuple[None, str]: A tuple containing the normalized
+        base URL and None if the URL is valid. Otherwise, a tuple of None
+        and an error message.
     """
     # List of non-business domains
     non_business_domains = [
@@ -168,17 +182,23 @@ def validate_url(url):
         return None, f"Error validating URL: {str(e)}"
 
 def poll_job_progress(base_url, job_id, max_retries=720, retry_delay=5):
-    """
-    Poll the progress of a job until it completes, fails, or is stopped.
-    
+    """Polls a job's progress endpoint until it reaches a terminal state.
+
+    This function repeatedly checks the progress of a background job by calling
+    its API endpoint. It continues until the job's status is 'completed',
+    'failed', or 'stopped', or until the maximum number of retries is reached.
+
     Args:
-        base_url (str): Base URL of the API (e.g., 'http://localhost:5000/api').
-        job_id (str): Unique job ID to track.
-        max_retries (int): Maximum number of retries for progress checks.
-        retry_delay (int): Seconds to wait between retries.
-    
+        base_url (str): The base URL of the API.
+        job_id (str): The unique identifier of the job to poll.
+        max_retries (int, optional): The maximum number of times to poll the
+            endpoint. Defaults to 720.
+        retry_delay (int, optional): The number of seconds to wait between
+            polling attempts. Defaults to 5.
+
     Returns:
-        dict: Progress data with status, emails (if completed), and error (if any).
+        dict: A dictionary containing the final status of the job, the last
+        known progress data, and any error message.
     """
     for attempt in range(max_retries):
         try:
@@ -211,17 +231,24 @@ def poll_job_progress(base_url, job_id, max_retries=720, retry_delay=5):
     }
 
 def read_job_results(result_file, job_id, max_retries=3, retry_delay=2):
-    """
-    Read job results from a JSON file, retrying if necessary.
-    
+    """Reads the results of a specific job from a JSON file.
+
+    This function attempts to read a JSON file that contains the results of one
+    or more jobs. It searches for the results corresponding to the given `job_id`.
+    It includes a retry mechanism to handle cases where the file might not be
+    immediately available.
+
     Args:
-        result_file (str): Path to the JSON results file.
-        job_id (str): Unique job ID to find results for.
-        max_retries (int): Maximum number of retries for reading the file.
-        retry_delay (int): Seconds to wait between retries.
-    
+        result_file (str): The path to the JSON file containing job results.
+        job_id (str): The unique identifier of the job whose results are needed.
+        max_retries (int, optional): The maximum number of times to attempt
+            reading the file. Defaults to 3.
+        retry_delay (int, optional): The number of seconds to wait between
+            retries. Defaults to 2.
+
     Returns:
-        dict: Results containing emails and error (if any).
+        dict: A dictionary containing the job's results (e.g., a list of emails)
+        and an error message if the results could not be read.
     """
     for attempt in range(max_retries):
         try:
@@ -247,14 +274,16 @@ def read_job_results(result_file, job_id, max_retries=3, retry_delay=2):
     }
 
 def is_example_domain(email):
-    """
-    Check if an email belongs to a common example domain.
-    
+    """Checks if an email address belongs to a common example domain.
+
+    This function is used to filter out email addresses that use placeholder or
+    test domains (e.g., 'example.com', 'test.com').
+
     Args:
-        email (str): Email address to check.
-    
+        email (str): The email address to check.
+
     Returns:
-        bool: True if email uses an example domain, False otherwise.
+        bool: True if the email's domain is an example domain, False otherwise.
     """
     EXAMPLE_DOMAINS = {"example.me","example.com", "example.org", "example.net", "test.com", "sample.com"}
     email = email.lower()
@@ -265,14 +294,16 @@ def is_example_domain(email):
     return False
 
 def validate_emails(emails):
-    """
-    Validate a list of emails and filter out invalid or example domain emails.
-    
+    """Validates and filters a list of email addresses.
+
+    This function takes a list of emails and returns a new list containing only
+    the emails that are well-formed and do not belong to an example domain.
+
     Args:
-        emails (list): List of email addresses to validate.
-    
+        emails (list[str]): A list of email addresses to validate.
+
     Returns:
-        list: Validated and filtered email addresses.
+        list[str]: A list of valid and non-example email addresses.
     """
     email_regex = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
     return [email for email in emails if email_regex.match(email) and not is_example_domain(email)]

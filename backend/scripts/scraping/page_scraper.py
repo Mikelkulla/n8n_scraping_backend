@@ -1,15 +1,18 @@
 import logging
 
 def scrape_page(driver, url):
-    """
-    Scrape a single page for emails.
-    
+    """Scrapes a single web page to find email addresses.
+
+    This function serves as a wrapper around `extract_emails_from_page`,
+    handling the process of visiting a URL and extracting emails from it.
+
     Args:
-        driver (WebDriver): Selenium WebDriver instance.
-        url (str): URL to scrape.
-    
+        driver: The Selenium WebDriver instance to use.
+        url (str): The URL of the page to scrape.
+
     Returns:
-        set: A set of emails found on the page.
+        set[str]: A set of unique email addresses found on the page. Returns an
+        empty set if an error occurs.
     """
     from .email_extractor import extract_emails_from_page
     

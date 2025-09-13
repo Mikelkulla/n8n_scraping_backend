@@ -6,14 +6,17 @@ EMAIL_REGEX = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
 EXAMPLE_DOMAINS = {"example.com", "example.org", "example.net", "test.com", "sample.com"}
 
 def extract_emails_from_text(text):
-    """
-    Extract email addresses from a given text string using regex, excluding example domains.
-    
+    """Extracts email addresses from a string of text.
+
+    This function uses a regular expression to find all substrings that match
+    the format of an email address. It filters out emails from common example
+    domains.
+
     Args:
-        text (str): Text to search for email addresses.
-    
+        text (str): The text to search for email addresses.
+
     Returns:
-        set: Set of unique email addresses found, excluding example domains.
+        set[str]: A set of unique email addresses found in the text.
     """
     emails = set(EMAIL_REGEX.findall(text))
     # Filter out example domains
@@ -22,16 +25,18 @@ def extract_emails_from_text(text):
     return filtered_emails
 
 def extract_emails_from_page(driver, url):
-    """
-    Extract email addresses from a webpage, including visible text and mailto links,
-    excluding example domains.
-    
+    """Extracts email addresses from a given web page.
+
+    This function navigates to a URL using a Selenium WebDriver and scans the
+    page for email addresses. It checks both the visible text content and any
+    `mailto:` links.
+
     Args:
-        driver (WebDriver): Selenium WebDriver instance.
-        url (str): URL of the page to scrape.
-    
+        driver: The Selenium WebDriver instance to use for browsing.
+        url (str): The URL of the web page to scrape.
+
     Returns:
-        set: Set of unique email addresses found on the page, excluding example domains.
+        set[str]: A set of unique email addresses found on the page.
     """
     logging.info(f"Scraping page for emails: {url}")
     emails = set()

@@ -11,14 +11,17 @@ from config.job_functions import write_progress
 from config.utils import extract_base_url
 
 def location_to_latlng(location):
-    """
-    Convert a location name to latitude and longitude using Nominatim.
+    """Converts a location name to its geographical coordinates.
+
+    This function uses the Nominatim geocoding service to find the latitude and
+    longitude for a given location string.
 
     Args:
-        location (str): Location name (e.g., "Sarande, Albania").
+        location (str): The name of the location to geocode (e.g., "Sarande, Albania").
 
     Returns:
-        str: Latitude,longitude string (e.g., "39.8755,20.0051") or None if not found.
+        str | None: A string containing the latitude and longitude, formatted as
+        "lat,lng", or None if the location cannot be found.
     """
     try:
         geolocator = Nominatim(user_agent="geoapi")
@@ -34,18 +37,24 @@ def location_to_latlng(location):
         return None
 
 def call_google_places_api_near_search(job_id, location, radius=300, place_type="lodging", max_places=20):
-    """
-    Fetch places from Google Places API and store results in the leads table.
+    """Fetches business listings from the Google Places "Nearby Search" API.
+
+    This function performs a search for places of a specific type within a given
+    radius of a location. It then fetches detailed information for each place
+    and stores the results in the database as leads.
 
     Args:
-        job_id (str): Unique job ID for tracking.
-        location (str): Location name (e.g., "Sarande, Albania").
-        radius (int): Search radius in meters (default: 300).
-        place_type (str): Google Places type (e.g., "lodging").
-        max_places (int): Maximum number of places to fetch (default: 20).
+        job_id (str): The unique identifier for the tracking job.
+        location (str): The location around which to search (e.g., "Sarande, Albania").
+        radius (int, optional): The search radius in meters. Defaults to 300.
+        place_type (str, optional): The type of place to search for (e.g., "lodging").
+            Defaults to "lodging".
+        max_places (int, optional): The maximum number of places to retrieve.
+            Defaults to 20.
 
     Returns:
-        list: List of place details (name, address, phone, website, place_id).
+        list[dict]: A list of dictionaries, where each dictionary contains the
+        details of a found place.
     """
     # Validate inputs
     if not job_id or not isinstance(job_id, str):
@@ -163,18 +172,24 @@ def call_google_places_api_near_search(job_id, location, radius=300, place_type=
         return []
 
 def call_google_places_api(job_id, step_id, location, radius=300, place_type="lodging", max_places=20):
-    """
-    Fetch places from Google Places Text Search (New) API and store results in the leads table.
+    """Fetches business listings using the Google Places "Text Search" API.
+
+    This function queries the Google Places API using a text-based search (e.g.,
+    "restaurants in New York"). It handles pagination to retrieve multiple pages
+    of results and stores the detailed information for each place in the database.
 
     Args:
-        job_id (str): Unique job ID for tracking.
-        location (str): Location name (e.g., "Sarande, Albania").
-        radius (int): Ignored (kept for compatibility; uses viewport instead).
-        place_type (str): Google Places type (e.g., "lodging").
-        max_places (int): Maximum number of places to fetch (default: 20).
+        job_id (str): The unique identifier for the tracking job.
+        step_id (str): The identifier for the current scraping step.
+        location (str): The location to include in the search query.
+        radius (int, optional): This parameter is ignored but kept for compatibility.
+        place_type (str, optional): The type of place to search for. Defaults to "lodging".
+        max_places (int, optional): The maximum number of places to retrieve.
+            Defaults to 20.
 
     Returns:
-        list: List of place details (name, address, phone, website, place_id).
+        list[dict]: A list of dictionaries, where each dictionary contains the
+        details of a found place.
     """
     # Validate inputs
     if not job_id or not isinstance(job_id, str):

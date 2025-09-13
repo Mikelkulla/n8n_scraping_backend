@@ -11,7 +11,29 @@ from fake_useragent import UserAgent
 from backend.config import Config
 
 class WebDriverManager:
+    """Manages the lifecycle of a Selenium WebDriver instance.
+
+    This class simplifies the process of creating, configuring, and closing
+    WebDriver instances for different browsers and use cases, such as running
+    with Tor, in headless mode, or with a specific user profile.
+    """
     def __init__(self, browser="chrome", headless=False, use_tor=False, linkedin=False, chromedriver_path=Config.CHROMEDRIVER_PATH, tor_path=Config.TOR_EXECUTABLE):
+        """Initializes the WebDriverManager and sets up the driver.
+
+        Args:
+            browser (str, optional): The browser to use ('chrome' or 'firefox').
+                Defaults to "chrome".
+            headless (bool, optional): Whether to run the browser in headless mode.
+                Defaults to False.
+            use_tor (bool, optional): Whether to configure the browser to use Tor.
+                Defaults to False.
+            linkedin (bool, optional): Whether to use a specific Chrome profile
+                for LinkedIn. Defaults to False.
+            chromedriver_path (str, optional): The path to the ChromeDriver
+                executable. Defaults to `Config.CHROMEDRIVER_PATH`.
+            tor_path (str, optional): The path to the Tor executable. Defaults to
+                `Config.TOR_EXECUTABLE`.
+        """
         logging.info(f"Initializing WebDriverManager with browser={browser}, headless={headless}, use_tor={use_tor}, linkedin={linkedin}")
         self.driver = None
         self.tor_process = None
@@ -24,6 +46,7 @@ class WebDriverManager:
         self.setup_driver()
 
     def setup_driver(self):
+        """Configures and initializes the WebDriver based on the instance's settings."""
         logging.info("Setting up WebDriver...")
         if self.use_tor:
             self.tor_process = self._start_tor()
@@ -127,7 +150,16 @@ class WebDriverManager:
         return driver
 
     def _add_human_behavior(self, driver):
+        """Adds a method to the driver to simulate human-like behavior.
+
+        This function attaches a new method `add_human_behavior` to the driver
+        instance, which can be called to perform random scrolling and pauses.
+
+        Args:
+            driver: The Selenium WebDriver instance to modify.
+        """
         def add_human_behavior():
+            """Simulates human interaction by scrolling and pausing randomly."""
             try:
                 driver.execute_script("window.scrollTo(0, document.body.scrollHeight * Math.random());")
                 time.sleep(random.uniform(0.5, 2.0))
@@ -136,15 +168,22 @@ class WebDriverManager:
         driver.add_human_behavior = add_human_behavior
 
     def restart_driver(self):
+        """Closes the current WebDriver instance and starts a new one."""
         logging.info("Restarting WebDriver...")
         self.close()
         self.setup_driver()
         logging.info("WebDriver restarted.")
 
     def get_driver(self):
+        """Returns the managed WebDriver instance.
+
+        Returns:
+            The configured Selenium WebDriver instance.
+        """
         return self.driver
 
     def close(self):
+        """Closes the WebDriver and terminates any associated Tor process."""
         logging.info("Closing WebDriver resources...")
         if self.driver:
             try:
@@ -157,6 +196,12 @@ class WebDriverManager:
         logging.info("WebDriver resources closed.")
 
     def _start_tor(self):
+        """Starts the Tor executable as a subprocess.
+
+        Returns:
+            subprocess.Popen | None: The process object for the started Tor
+            instance, or None if it fails to start.
+        """
         logging.info("Starting Tor process...")
         try:
             process = subprocess.Popen(self.tor_path, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -168,6 +213,11 @@ class WebDriverManager:
 
     @staticmethod
     def _stop_tor(tor_process):
+        """Stops a running Tor process and its children.
+
+        Args:
+            tor_process (subprocess.Popen): The process object for the Tor instance.
+        """
         logging.info("Stopping Tor process...")
         if tor_process:
             try:
@@ -181,6 +231,11 @@ class WebDriverManager:
 
     @staticmethod
     def kill_chrome_processes():
+        """Terminates any running Chrome and ChromeDriver processes.
+
+        This is a utility function to clean up lingering browser processes that
+        might not have been closed correctly.
+        """
         for proc in psutil.process_iter(['name']):
             if proc.info['name'].lower() in ['chrome.exe', 'chromedriver.exe']:
                 try:

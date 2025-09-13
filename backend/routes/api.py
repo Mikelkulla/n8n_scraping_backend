@@ -18,13 +18,16 @@ api_bp = Blueprint("api", __name__)
 active_jobs = {}
 
 def start_job_thread(job_id, step_id, task):
-    """
-    Start a job in a separate thread and track it in active_jobs.
+    """Starts a background job in a new thread.
+
+    This function takes a task, which is a callable function, and runs it in a
+    separate thread. The thread is stored in a global `active_jobs` dictionary,
+    keyed by its `job_id`, to keep track of running jobs.
 
     Args:
-        job_id (str): Unique job ID.
-        step_id (str): Step ID for the job.
-        task (callable): The task function to run in the thread.
+        job_id (str): The unique identifier for the job.
+        step_id (str): The identifier for the specific task or step.
+        task (callable): The function to be executed in the new thread.
     """
     thread = threading.Thread(target=task)
     active_jobs[job_id] = thread
@@ -32,18 +35,23 @@ def start_job_thread(job_id, step_id, task):
 
 @api_bp.route("/scrape/website-emails", methods=["POST"])
 def start_scrape():
-    """
-    Start an email scraping job for a given URL and return the results directly.
+    """API endpoint to start a synchronous email scraping job.
 
-    Request Body:
-        - url (str): The base URL to scrape (e.g., "https://example.com").
-        - max_pages (int, optional): Maximum number of pages to scrape.
-        - use_tor (bool, optional): Whether to use Tor for scraping.
-        - headless (bool, optional): Whether to run WebDriver in headless mode.
-        - sitemap_limit (int, optional): Max number of sub-sitemaps to scrape.
-        
+    This endpoint initiates a scraping task for a given URL. The scraping is
+    performed synchronously, and the results are returned directly in the
+    HTTP response upon completion.
+
+    Request JSON Body:
+        url (str): The base URL of the website to scrape.
+        max_pages (int, optional): The maximum number of pages to visit.
+        use_tor (bool, optional): If True, routes traffic through the Tor network.
+        headless (bool, optional): If True, runs the browser in headless mode.
+        sitemap_limit (int, optional): The maximum number of sub-sitemaps to
+            process.
+
     Returns:
-        JSON response with job_id, status, and scraped emails.
+        A JSON response containing the job details and the list of found emails,
+        or an error message.
     """
     job_id = str(uuid.uuid4())
     step_id = "email_scrape"
@@ -103,17 +111,23 @@ def start_scrape():
 
 @api_bp.route("/scrape/google-maps", methods=["POST"])
 def google_maps_scrape():
-    """
-    Scrape Google Maps for places in a given location and store results in the leads table.
+    """API endpoint to start a Google Maps scraping job.
 
-    Request Body:
-        - location (str): Location to search (e.g., "Sarande, Albania").
-        - radius (int, optional): Search radius in meters (default: 300).
-        - place_type (str, optional): Google Place type (default: "lodging").
-        - max_places (int, optional): Maximum number of places to fetch (default: 20).
+    This endpoint initiates a background job to search for places on Google Maps
+    based on a location and place type. The job runs asynchronously, and the
+    results are stored in the database.
+
+    Request JSON Body:
+        location (str): The location to search for (e.g., "Sarande, Albania").
+        radius (int, optional): The search radius in meters. Defaults to 300.
+        place_type (str, optional): The type of place to search for (e.g.,
+            "lodging", "restaurant"). Defaults to "lodging".
+        max_places (int, optional): The maximum number of places to retrieve.
+            Defaults to 20.
 
     Returns:
-        JSON response with job_id and status.
+        A JSON response with the job_id and a "started" status, or an error
+        message.
     """
     try:
         data = request.get_json()
@@ -169,14 +183,17 @@ def google_maps_scrape():
 
 @api_bp.route("/progress/<job_id>", methods=["GET"])
 def get_progress(job_id):
-    """
-    Get the progress of a scraping job.
+    """API endpoint to retrieve the progress of a scraping job.
+
+    This endpoint queries the database for the status and progress of a job
+    identified by its `job_id`.
 
     Args:
-        job_id (str): The unique job ID.
+        job_id (str): The unique identifier of the job to check.
 
     Returns:
-        JSON response with job progress details.
+        A JSON response containing the detailed progress of the job, or an
+        error message if the job is not found.
     """
     try:
         with Database() as db:
@@ -205,14 +222,18 @@ def get_progress(job_id):
 
 @api_bp.route("/stop/<job_id>", methods=["POST"])
 def stop_scrape(job_id):
-    """
-    Stop a running scraping job, works for both sync and async jobs.
+    """API endpoint to stop a running scraping job.
+
+    This endpoint signals a running job to terminate gracefully. It works for
+    both synchronous and asynchronous jobs by creating a stop signal file that
+    the scraping loops check for.
 
     Args:
-        job_id (str): The unique job ID.
+        job_id (str): The unique identifier of the job to be stopped.
 
     Returns:
-        JSON response indicating success or failure.
+        A JSON response indicating whether the stop signal was successfully
+        sent, or an error message if the job cannot be stopped.
     """
     try:
         step_id = None
@@ -278,16 +299,20 @@ def stop_scrape(job_id):
 # This endpoint use scraping.db database's leads table to fill the email fields by scraping emails using website-emails endpoint
 @api_bp.route("/scrape/leads-emails", methods=["POST"])
 def scrape_leads_emails():
-    """
-    Start email scraping for websites in the leads table, monitor progress, and update emails in the database.
+    """API endpoint to scrape emails for all unscraped leads in the database.
 
-    Request Body:
-        - max_pages (int, optional): Maximum number of pages to scrape per website.
-        - use_tor (bool, optional): Whether to use Tor for scraping.
-        - headless (bool, optional): Whether to run WebDriver in headless mode.
+    This endpoint retrieves all leads from the database that have a website but
+    have not yet been scraped for emails. It then iterates through each lead,
+    calling the `/scrape/website-emails` endpoint for each one, and updates the
+    lead's record with the found emails.
+
+    Request JSON Body:
+        max_pages (int, optional): Max pages to scrape per website. Defaults to 30.
+        use_tor (bool, optional): Whether to use Tor. Defaults to False.
+        headless (bool, optional): Whether to run in headless mode. Defaults to True.
 
     Returns:
-        JSON response with job IDs, their statuses, and collected emails.
+        A JSON response summarizing the results of the scraping jobs for each lead.
     """
     try:
         data = request.get_json() or {}
