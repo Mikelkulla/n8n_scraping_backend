@@ -1,4 +1,7 @@
 import logging
+from .email_extractor import extract_emails_from_page
+
+logger = logging.getLogger(__name__)
 
 def scrape_page(driver, url):
     """Scrapes a single web page to find email addresses.
@@ -14,12 +17,10 @@ def scrape_page(driver, url):
         set[str]: A set of unique email addresses found on the page. Returns an
         empty set if an error occurs.
     """
-    from .email_extractor import extract_emails_from_page
-    
-    logging.info(f"Visiting URL: {url}")
+    logger.info(f"Visiting URL: {url}")
     try:
         emails = extract_emails_from_page(driver, url)
         return emails
     except Exception as e:
-        logging.error(f"Error scraping {url}: {e}")
+        logger.error(f"Error scraping {url}: {e}")
         return set()
