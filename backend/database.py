@@ -37,12 +37,15 @@ class Database:
         """
         Initialize the SQLite database and create the tables if they don't exist.
         """
+        conn = None
         try:
-            # Ensure the directory exists and is writable
-            db_dir = os.path.dirname(self.db_path)
-            os.makedirs(db_dir, exist_ok=True)
-            if not os.access(db_dir, os.W_OK):
-                raise PermissionError(f"No write permission for {db_dir}")
+            # For in-memory databases, no directory creation is needed
+            if self.db_path != ':memory:':
+                db_dir = os.path.dirname(self.db_path)
+                if db_dir:
+                    os.makedirs(db_dir, exist_ok=True)
+                    if not os.access(db_dir, os.W_OK):
+                        raise PermissionError(f"No write permission for {db_dir}")
 
             # Connect to the database to create tables
             conn = sqlite3.connect(self.db_path)
@@ -68,7 +71,7 @@ class Database:
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     error_message TEXT,
                     stop_call BOOLEAN DEFAULT FALSE,
-                    UNIQUE(job_id, step_id)
+                    UNIQUE(job_id)
                 )
             """)
 
@@ -112,6 +115,7 @@ class Database:
         self.conn = sqlite3.connect(self.db_path, timeout=10.0)
         self.conn.row_factory = sqlite3.Row
         self.cursor = self.conn.cursor()
+        self.cursor.execute("PRAGMA foreign_keys = ON")
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -251,7 +255,11 @@ class Database:
             return []
 
     def insert_lead(self, job_id, place_id, location=None, name=None, address=None, phone=None, website=None, emails=None):
-        """Inserts or replaces a lead record in the database.
+        """Inserts a new lead record into the database.
+
+        Note: This method will fail if a lead with the same job_id and place_id
+        already exists, due to UNIQUE constraints. Use `update_lead` for
+        modifying existing records.
 
         Args:
             job_id (str): The identifier of the job that generated this lead.
@@ -265,13 +273,13 @@ class Database:
         """
         try:
             self.cursor.execute("""
-                INSERT OR REPLACE INTO leads (
+                INSERT INTO leads (
                     job_id, place_id, location, name, address, phone, website, emails, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """, (job_id, place_id, location, name, address, phone, website, emails))
-            logging.info(f"Inserted/Updated lead for job {job_id}, place {place_id}")
+            logging.info(f"Inserted lead for job {job_id}, place {place_id}")
         except sqlite3.Error as e:
-            logging.error(f"Failed to insert/update lead for job {job_id}, place {place_id}: {e}")
+            logging.error(f"Failed to insert lead for job {job_id}, place {place_id}: {e}")
 
     def update_lead(self, job_id, place_id, location=None, name=None, address=None, phone=None, website=None, emails=None, status=None):
         """Updates an existing lead record in the database.
