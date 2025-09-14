@@ -4,6 +4,38 @@ import os
 from logging.handlers import RotatingFileHandler
 from backend.config import Config
 
+# Custom RotatingFileHandler to rename rotated files with end timestamp
+class TimestampedRotatingFileHandler(RotatingFileHandler):
+    """A rotating file handler that appends a timestamp to log files on rotation.
+
+    This custom handler overrides the default rotation behavior to rename the
+    old log file with a timestamp of when the rotation occurred, rather than
+    using a simple numeric index.
+    """
+    def doRollover(self):
+        """Performs the log file rotation.
+
+        This method is called when the current log file exceeds its maximum
+        size. It closes the current file, renames it with a timestamp
+        (e.g., 'log_file_HH_MM_SS.log'), and opens a new log file for
+        subsequent messages.
+        """
+        # First, close the existing stream to release the file handle.
+        if self.stream:
+            self.stream.close()
+            self.stream = None
+        
+        end_time = datetime.now().strftime("%H_%M_%S")
+        # Rename the current log file with the end timestamp.
+        if os.path.exists(self.baseFilename):
+            rotated_file = f"{self.baseFilename[:-4]}_{end_time}.log"
+            os.rename(self.baseFilename, rotated_file)
+        
+        # Explicitly open a new stream. This is more robust than waiting for
+        # the next log message to trigger the open.
+        if not self.delay:
+            self.stream = self._open()
+
 
 def setup_logging(log_dir=Config.LOG_PATH, log_prefix=Config.LOG_PREFIX, max_bytes=Config.MAX_BYTES, log_level=Config.LOG_LEVEL):
     """Configures logging for the application.
@@ -39,38 +71,6 @@ def setup_logging(log_dir=Config.LOG_PATH, log_prefix=Config.LOG_PREFIX, max_byt
         "CRITICAL": logging.CRITICAL,
     }
     numeric_log_level = log_level_map.get(log_level.upper(), logging.INFO)
-
-    # Custom RotatingFileHandler to rename rotated files with end timestamp
-    class TimestampedRotatingFileHandler(RotatingFileHandler):
-        """A rotating file handler that appends a timestamp to log files on rotation.
-
-        This custom handler overrides the default rotation behavior to rename the
-        old log file with a timestamp of when the rotation occurred, rather than
-        using a simple numeric index.
-        """
-        def doRollover(self):
-            """Performs the log file rotation.
-
-            This method is called when the current log file exceeds its maximum
-            size. It closes the current file, renames it with a timestamp
-            (e.g., 'log_file_HH_MM_SS.log'), and opens a new log file for
-            subsequent messages.
-            """
-            # First, close the existing stream to release the file handle.
-            if self.stream:
-                self.stream.close()
-                self.stream = None
-            
-            end_time = datetime.now().strftime("%H_%M_%S")
-            # Rename the current log file with the end timestamp.
-            if os.path.exists(self.baseFilename):
-                rotated_file = f"{self.baseFilename[:-4]}_{end_time}.log"
-                os.rename(self.baseFilename, rotated_file)
-            
-            # Explicitly open a new stream. This is more robust than waiting for
-            # the next log message to trigger the open.
-            if not self.delay:
-                self.stream = self._open()
 
     try:
         # Create log directory if it doesn't exist
