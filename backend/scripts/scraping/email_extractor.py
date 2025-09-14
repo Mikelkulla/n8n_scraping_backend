@@ -2,7 +2,7 @@ import re
 from selenium.webdriver.common.by import By
 import logging
 
-EMAIL_REGEX = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
+EMAIL_REGEX = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
 EXAMPLE_DOMAINS = {"example.com", "example.org", "example.net", "test.com", "sample.com"}
 
 def extract_emails_from_text(text):
