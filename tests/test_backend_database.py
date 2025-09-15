@@ -49,7 +49,7 @@ class TestDatabase:
             cursor.execute("PRAGMA table_info(leads);")
             lead_columns = [row[1] for row in cursor.fetchall()]
             assert 'lead_id' in lead_columns
-            assert 'job_id' in lead_columns
+            assert 'execution_id' in lead_columns
             assert 'place_id' in lead_columns
 
     def test_insert_and_get_job_execution(self, temp_db):
@@ -74,17 +74,13 @@ class TestDatabase:
             job = conn.get_job_execution("job_unknown", "step_unknown")
             assert job is None
 
-    def test_insert_or_replace_job_execution(self, temp_db):
-        """Test that an existing job execution is replaced on re-insertion."""
+    def test_insert_job_execution_uniqueness(self, temp_db):
+        """Test that inserting a job with a duplicate (job_id, step_id) fails."""
         db, _ = temp_db
         with db as conn:
             conn.insert_job_execution("job1", "step1", "input1", status="running")
-            job = conn.get_job_execution("job1", "step1")
-            assert job['status'] == "running"
-
-            conn.insert_job_execution("job1", "step1", "input1", status="completed")
-            job = conn.get_job_execution("job1", "step1")
-            assert job['status'] == "completed"
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.insert_job_execution("job1", "step1", "input1", status="completed")
 
     def test_update_job_execution(self, temp_db):
         """Test updating various fields of a job execution."""
@@ -128,8 +124,11 @@ class TestDatabase:
         with db as conn:
             # First, insert a job execution for the foreign key constraint
             conn.insert_job_execution("job1", "step1", "input1", status="running")
+            execution = conn.get_job_execution("job1", "step1")
+            execution_id = execution['execution_id']
+
             conn.insert_lead(
-                job_id="job1",
+                execution_id=execution_id,
                 place_id="place1",
                 name="Test Business",
                 website="http://example.com"
@@ -137,6 +136,7 @@ class TestDatabase:
             leads = conn.get_leads()
             assert len(leads) == 1
             assert leads[0]['name'] == "Test Business"
+            assert leads[0]['job_id'] == "job1" # Test the join
 
     def test_get_leads_empty(self, temp_db):
         """Test retrieving leads when the table is empty."""
@@ -150,14 +150,17 @@ class TestDatabase:
         db, _ = temp_db
         with db as conn:
             conn.insert_job_execution("job1", "step1", "input1", status="running")
-            # Insert leads first, then update status
-            conn.insert_lead("job1", "place1", name="scraped", website="a.com")
-            conn.update_lead("job1", "place1", status="scraped")
-            
-            conn.insert_lead("job1", "place2", name="not scraped", website="b.com")
-            conn.update_lead("job1", "place2", status="pending")
+            execution = conn.get_job_execution("job1", "step1")
+            execution_id = execution['execution_id']
 
-            conn.insert_lead("job1", "place3", name="not scraped null", website="c.com")
+            # Insert leads first, then update status
+            conn.insert_lead(execution_id, "place1", name="scraped", website="a.com")
+            conn.update_lead("place1", execution_id=execution_id, status="scraped")
+            
+            conn.insert_lead(execution_id, "place2", name="not scraped", website="b.com")
+            conn.update_lead("place2", execution_id=execution_id, status="pending")
+
+            conn.insert_lead(execution_id, "place3", name="not scraped null", website="c.com")
 
             leads = conn.get_leads(status_filter="NOT scraped")
             assert len(leads) == 2
@@ -168,11 +171,12 @@ class TestDatabase:
         db, _ = temp_db
         with db as conn:
             conn.insert_job_execution("job1", "step1", "input1", status="running")
-            conn.insert_lead("job1", "place1", name="Original", website="a.com")
-            conn.update_lead(job_id="job1", place_id="place1", name="Updated", emails="test@example.com")
+            execution = conn.get_job_execution("job1", "step1")
+            execution_id = execution['execution_id']
+            conn.insert_lead(execution_id, "place1", name="Original", website="a.com")
+            conn.update_lead(place_id="place1", execution_id=execution_id, name="Updated", emails="test@example.com")
             
             # Retrieve the lead again to check if it was updated
-            # get_leads is the only public method to get leads
             leads = conn.get_leads()
             updated_lead = next((l for l in leads if l['place_id'] == 'place1'), None)
             assert updated_lead is not None
@@ -184,15 +188,14 @@ class TestDatabase:
         db, db_path = temp_db
         with db as conn:
             conn.insert_job_execution("job1", "step1", "input1", status="running")
-            conn.insert_lead("job1", "place1", name="Original", website="example.com")
+            execution = conn.get_job_execution("job1", "step1")
+            execution_id = execution['execution_id']
+            conn.insert_lead(execution_id, "place1", name="Original", website="example.com")
 
-        # Attempt to insert the same lead again, this may or may not raise an exception
-        # depending on the environment, so we wrap it in a try block.
-        try:
-            with db as conn:
-                conn.insert_lead("job1", "place1", name="Duplicate", website="example.com")
-        except sqlite3.IntegrityError:
-            pass  # This is an expected outcome in some environments
+        # Attempt to insert the same lead again, which should fail due to UNIQUE constraint
+        with pytest.raises(sqlite3.IntegrityError):
+            with Database(db_path=db_path) as conn:
+                conn.insert_lead(execution_id, "place1", name="Duplicate", website="example.com")
 
         # Verify that the second insert did not overwrite the original
         db_checker = Database(db_path=db_path)
@@ -236,20 +239,12 @@ class TestDatabase:
         assert result is None
 
     def test_foreign_key_constraint(self, temp_db):
-        """Test that inserting a lead with a non-existent job_id fails."""
-        db, db_path = temp_db
-        try:
+        """Test that inserting a lead with a non-existent execution_id fails."""
+        db, _ = temp_db
+        with pytest.raises(sqlite3.IntegrityError):
             with db as conn:
-                # Attempt to insert a lead with a job_id that does not exist
-                conn.insert_lead(job_id="nonexistent_job", place_id="place1", website="test.com")
-        except sqlite3.IntegrityError:
-            pass # Expected outcome in some environments
-
-        # Verify that the lead was not inserted
-        db_checker = Database(db_path=db_path)
-        with db_checker as checker:
-            leads = checker.get_leads()
-            assert len(leads) == 0
+                # Attempt to insert a lead with an execution_id that does not exist
+                conn.insert_lead(execution_id=999, place_id="place1", website="test.com")
 
     @patch('os.path.join', return_value=os.path.join(Config.TEMP_PATH, "scraping.db"))
     def test_init_db_defaults_to_config_path(self, mock_join):
