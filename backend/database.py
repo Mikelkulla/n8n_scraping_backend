@@ -71,7 +71,7 @@ class Database:
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     error_message TEXT,
                     stop_call BOOLEAN DEFAULT FALSE,
-                    UNIQUE(job_id)
+                    UNIQUE(job_id, step_id)
                 )
             """)
 
@@ -79,7 +79,7 @@ class Database:
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS leads (
                     lead_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    job_id TEXT NOT NULL,
+                    execution_id INTEGER NOT NULL,
                     place_id TEXT NOT NULL,
                     location TEXT,
                     name TEXT,
@@ -90,8 +90,8 @@ class Database:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     status TEXT,
-                    UNIQUE(job_id, place_id),
-                    FOREIGN KEY (job_id) REFERENCES job_executions(job_id)
+                    UNIQUE(execution_id, place_id),
+                    FOREIGN KEY (execution_id) REFERENCES job_executions(execution_id)
                 )
             """)
             conn.commit()
@@ -134,7 +134,7 @@ class Database:
         Database._lock.release()
 
     def insert_job_execution(self, job_id, step_id, input, max_pages=None, use_tor=None, headless=None, status=None, stop_call=False, error_message=None, current_row=None, total_rows=None):
-        """Inserts or replaces a job execution record in the database.
+        """Inserts a new job execution record into the database.
 
         Args:
             job_id (str): The unique identifier for the job.
@@ -151,14 +151,15 @@ class Database:
         """
         try:
             self.cursor.execute("""
-                INSERT OR REPLACE INTO job_executions (
+                INSERT INTO job_executions (
                     job_id, step_id, input, max_pages, use_tor, headless, status, stop_call,
                     error_message, current_row, total_rows, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """, (job_id, step_id, input, max_pages, use_tor, headless, status, stop_call, error_message, current_row, total_rows))
-            logging.info(f"Inserted/Updated execution for job {job_id}, step {step_id}")
+            logging.info(f"Inserted execution for job {job_id}, step {step_id}")
         except sqlite3.Error as e:
-            logging.error(f"Failed to insert/update execution for job {job_id}: {e}")
+            logging.error(f"Failed to insert execution for job {job_id}: {e}")
+            raise
 
     def update_job_execution(self, job_id, step_id, current_row=None, total_rows=None, status=None, error_message=None, stop_call=None):
         """Updates an existing job execution record.
@@ -210,6 +211,7 @@ class Database:
                 logging.info(f"Updated execution for job {job_id}, step {step_id}")
         except sqlite3.Error as e:
             logging.error(f"Failed to update execution for job {job_id}: {e}")
+            raise
 
     def get_job_execution(self, job_id, step_id):
         """Retrieves a job execution record from the database.
@@ -233,7 +235,7 @@ class Database:
             return None
 
     def get_leads(self, status_filter=None):
-        """Retrieves lead records from the database.
+        """Retrieves lead records from the database, joining with job_executions.
 
         Args:
             status_filter (str, optional): A filter to apply to the lead status.
@@ -241,12 +243,19 @@ class Database:
                 processed. Defaults to None.
 
         Returns:
-            list[dict]: A list of dictionaries, where each dictionary represents a lead.
+            list[dict]: A list of dictionaries, where each dictionary represents a lead
+            including the `job_id` from the parent execution.
         """
         try:
-            query = "SELECT * FROM leads WHERE website IS NOT NULL"
+            query = """
+                SELECT l.*, j.job_id
+                FROM leads l
+                JOIN job_executions j ON l.execution_id = j.execution_id
+                WHERE l.website IS NOT NULL
+            """
             if status_filter == "NOT scraped":
-                query += " AND (status IS NULL OR status != 'scraped')"
+                query += " AND (l.status IS NULL OR l.status != 'scraped')"
+            
             self.cursor.execute(query)
             rows = self.cursor.fetchall()
             return [dict(row) for row in rows] if rows else []
@@ -254,15 +263,15 @@ class Database:
             logging.error(f"Failed to fetch leads: {e}")
             return []
 
-    def insert_lead(self, job_id, place_id, location=None, name=None, address=None, phone=None, website=None, emails=None):
+    def insert_lead(self, execution_id, place_id, location=None, name=None, address=None, phone=None, website=None, emails=None):
         """Inserts a new lead record into the database.
 
-        Note: This method will fail if a lead with the same job_id and place_id
+        Note: This method will fail if a lead with the same execution_id and place_id
         already exists, due to UNIQUE constraints. Use `update_lead` for
         modifying existing records.
 
         Args:
-            job_id (str): The identifier of the job that generated this lead.
+            execution_id (int): The identifier of the job execution that generated this lead.
             place_id (str): The unique identifier for the place (e.g., from Google Maps).
             location (str, optional): The location searched. Defaults to None.
             name (str, optional): The name of the business. Defaults to None.
@@ -274,19 +283,20 @@ class Database:
         try:
             self.cursor.execute("""
                 INSERT INTO leads (
-                    job_id, place_id, location, name, address, phone, website, emails, created_at
+                    execution_id, place_id, location, name, address, phone, website, emails, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            """, (job_id, place_id, location, name, address, phone, website, emails))
-            logging.info(f"Inserted lead for job {job_id}, place {place_id}")
+            """, (execution_id, place_id, location, name, address, phone, website, emails))
+            logging.info(f"Inserted lead for execution {execution_id}, place {place_id}")
         except sqlite3.Error as e:
-            logging.error(f"Failed to insert lead for job {job_id}, place {place_id}: {e}")
+            logging.error(f"Failed to insert lead for execution {execution_id}, place {place_id}: {e}")
+            raise
 
-    def update_lead(self, job_id, place_id, location=None, name=None, address=None, phone=None, website=None, emails=None, status=None):
+    def update_lead(self, place_id, execution_id=None, location=None, name=None, address=None, phone=None, website=None, emails=None, status=None):
         """Updates an existing lead record in the database.
 
         Args:
-            job_id (str): The identifier of the job associated with the lead.
             place_id (str): The unique identifier of the place to update.
+            execution_id (int, optional): The identifier of the job execution. Defaults to None.
             location (str, optional): The new location. Defaults to None.
             name (str, optional): The new name. Defaults to None.
             address (str, optional): The new address. Defaults to None.
@@ -322,18 +332,25 @@ class Database:
             set_clauses.append("updated_at = CURRENT_TIMESTAMP")
 
             if not set_clauses:
-                logging.warning(f"No fields to update for lead with job {job_id}, place {place_id}")
+                logging.warning(f"No fields to update for lead with place {place_id}")
                 return
 
             query = f"UPDATE leads SET {', '.join(set_clauses)} WHERE place_id = ?"
             params.extend([place_id])
+            
+            # If execution_id is provided, add it to the WHERE clause for more specific targeting
+            if execution_id is not None:
+                query += " AND execution_id = ?"
+                params.append(execution_id)
+
             self.cursor.execute(query, params)
             if self.cursor.rowcount == 0:
-                logging.warning(f"No record found to update for lead with job {job_id}, place {place_id}")
+                logging.warning(f"No record found to update for lead with place {place_id}")
             else:
-                logging.info(f"Updated lead for job {job_id}, place {place_id}")
+                logging.info(f"Updated lead for place {place_id}")
         except sqlite3.Error as e:
-            logging.error(f"Failed to update lead for job {job_id}, place {place_id}: {e}")
+            logging.error(f"Failed to update lead for place {place_id}: {e}")
+            raise
 
 if __name__ == "__main__":
     with Database() as db:

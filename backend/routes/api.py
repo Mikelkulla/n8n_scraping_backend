@@ -370,8 +370,8 @@ def scrape_leads_emails():
                 try:
                     with Database() as db:
                         db.update_lead(
-                            job_id=lead.get("job_id"),
                             place_id=lead.get("place_id"),
+                            execution_id=lead.get("execution_id"),
                             status="skipped"
                         )
                     logging.info(f"Updated lead {lead.get('lead_id')} status to 'skipped' in DB.")
@@ -395,8 +395,8 @@ def scrape_leads_emails():
                 try:
                     with Database() as db:
                         db.update_lead(
-                            job_id=lead.get("job_id"),
                             place_id=lead.get("place_id"),
+                            execution_id=lead.get("execution_id"),
                             status="failed"
                         )
                     logging.info(f"Updated lead {lead.get('lead_id')} status to 'failed' in DB.")
@@ -451,8 +451,8 @@ def scrape_leads_emails():
                     with Database() as db:
                         emails_str = ','.join(emails) if emails else None
                         db.update_lead(
-                            job_id=lead['job_id'],
                             place_id=lead['place_id'],
+                            execution_id=lead['execution_id'],
                             emails=emails_str,
                             status='scraped'
                         )

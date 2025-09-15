@@ -36,7 +36,7 @@ def location_to_latlng(location):
         logging.error(f"Geocoding failed for {location}: {e}")
         return None
 
-def call_google_places_api_near_search(job_id, location, radius=300, place_type="lodging", max_places=20):
+def call_google_places_api_near_search(job_id, step_id, location, radius=300, place_type="lodging", max_places=20):
     """Fetches business listings from the Google Places "Nearby Search" API.
 
     This function performs a search for places of a specific type within a given
@@ -45,6 +45,7 @@ def call_google_places_api_near_search(job_id, location, radius=300, place_type=
 
     Args:
         job_id (str): The unique identifier for the tracking job.
+        step_id (str): The identifier for the current scraping step.
         location (str): The location around which to search (e.g., "Sarande, Albania").
         radius (int, optional): The search radius in meters. Defaults to 300.
         place_type (str, optional): The type of place to search for (e.g., "lodging").
@@ -75,6 +76,13 @@ def call_google_places_api_near_search(job_id, location, radius=300, place_type=
 
     try:
         with Database() as db:
+            # Get the execution_id for the current job
+            execution = db.get_job_execution(job_id, step_id)
+            if not execution:
+                logging.error(f"No job execution found for job_id {job_id}, step_id {step_id}")
+                return []
+            execution_id = execution['execution_id']
+
             # Nearby Search endpoint
             url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
             params = {
@@ -118,7 +126,7 @@ def call_google_places_api_near_search(job_id, location, radius=300, place_type=
 
                 details = details_data.get("result", {})
                 lead_data = {
-                    "job_id": job_id,
+                    "execution_id": execution_id,
                     "place_id": place_id,
                     "location": location,
                     "name": details.get("name"),
@@ -130,25 +138,25 @@ def call_google_places_api_near_search(job_id, location, radius=300, place_type=
                 results.append(lead_data)
 
                 # Check if lead exists
-                db.cursor.execute("SELECT lead_id FROM leads WHERE place_id = ?", (place_id,))
+                db.cursor.execute("SELECT lead_id FROM leads WHERE place_id = ? AND execution_id = ?", (place_id, execution_id))
                 existing_lead = db.cursor.fetchone()
                 logging.info(f"Existing Lead: {existing_lead}")
                 if existing_lead:
                     # Update existing lead
                     db.update_lead(
-                        job_id=job_id,
                         place_id=place_id,
+                        execution_id=execution_id,
                         location=lead_data["location"],
                         name=lead_data["name"],
                         address=lead_data["address"],
                         phone=lead_data["phone"],
                         website=lead_data["website"]
                     )
-                    logging.info(f"Updated existing lead for place {lead_data['name']} (job_id: {job_id})")
+                    logging.info(f"Updated existing lead for place {lead_data['name']} (execution_id: {execution_id})")
                 else:
                     # Insert new lead
                     db.insert_lead(
-                        job_id=job_id,
+                        execution_id=execution_id,
                         place_id=place_id,
                         location=lead_data["location"],
                         name=lead_data["name"],
@@ -156,7 +164,7 @@ def call_google_places_api_near_search(job_id, location, radius=300, place_type=
                         phone=lead_data["phone"],
                         website=lead_data["website"]
                     )
-                    logging.info(f"Stored lead for place {lead_data['name']} (job_id: {job_id})")
+                    logging.info(f"Stored lead for place {lead_data['name']} (execution_id: {execution_id})")
                 count += 1
 
             return results
@@ -207,6 +215,13 @@ def call_google_places_api(job_id, step_id, location, radius=300, place_type="lo
 
     try:
         with Database() as db:
+            # Get the execution_id for the current job
+            execution = db.get_job_execution(job_id, step_id)
+            if not execution:
+                logging.error(f"No job execution found for job_id {job_id}, step_id {step_id}")
+                return []
+            execution_id = execution['execution_id']
+
             # Text Search (New) endpoint
             url = "https://places.googleapis.com/v1/places:searchText"
             headers = {
@@ -246,7 +261,7 @@ def call_google_places_api(job_id, step_id, location, radius=300, place_type="lo
                     website = extract_base_url(place.get("websiteUri"))
                     
                     lead_data = {
-                        "job_id": job_id,
+                        "execution_id": execution_id,
                         "place_id": place_id,
                         "location": f"{place_type}:{location}",
                         "name": place.get("displayName", {}).get("text"),
@@ -259,7 +274,7 @@ def call_google_places_api(job_id, step_id, location, radius=300, place_type="lo
 
                     # Check if lead exists
                     logging.info("Before Select")
-                    db.cursor.execute("SELECT lead_id FROM leads WHERE place_id = ?", (place_id,))
+                    db.cursor.execute("SELECT lead_id FROM leads WHERE place_id = ? AND execution_id = ?", (place_id, execution_id))
                     logging.info("After Select")
                     existing_lead = db.cursor.fetchone()
                     logging.info(f"Existing Lead: {existing_lead}")
@@ -267,19 +282,19 @@ def call_google_places_api(job_id, step_id, location, radius=300, place_type="lo
                     if existing_lead:
                         # Update existing lead
                         db.update_lead(
-                            job_id=job_id,
                             place_id=place_id,
+                            execution_id=execution_id,
                             location=lead_data["location"],
                             name=lead_data["name"],
                             address=lead_data["address"],
                             phone=lead_data["phone"],
                             website=lead_data["website"]
                         )
-                        logging.info(f"Updated existing lead for place {lead_data['name']} (job_id: {job_id})")
+                        logging.info(f"Updated existing lead for place {lead_data['name']} (execution_id: {execution_id})")
                     else:
                         # Insert new lead
                         db.insert_lead(
-                            job_id=job_id,
+                            execution_id=execution_id,
                             place_id=place_id,
                             location=lead_data["location"],
                             name=lead_data["name"],
@@ -287,7 +302,7 @@ def call_google_places_api(job_id, step_id, location, radius=300, place_type="lo
                             phone=lead_data["phone"],
                             website=lead_data["website"]
                         )
-                        logging.info(f"Stored lead for place {lead_data['name']} (job_id: {job_id})")
+                        logging.info(f"Stored lead for place {lead_data['name']} (execution_id: {execution_id})")
                     write_progress(job_id, step_id, input=f"{place_type}:{location}", current_row=count + 1, total_rows=total_rows, db_connection=db)
                     count += 1
 
