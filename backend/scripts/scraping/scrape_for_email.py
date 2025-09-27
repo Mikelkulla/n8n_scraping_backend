@@ -121,17 +121,25 @@ class EmailScraper:
         """Discovers URLs to scrape from the website's robots.txt and sitemaps."""
         logging.info(f"Starting URL for job {self.job_id}: {self.base_url}")
         sitemap_urls = get_robots_txt_urls(self.driver, self.base_url)
-        sitemap_urls.extend([
+
+        # Add common sitemap URLs if not already discovered
+        potential_sitemaps = [
             urljoin(self.base_url, "/sitemap_index.xml"),
             urljoin(self.base_url, "/sitemap.xml"),
             urljoin(self.base_url, "/sitemapindex.xml")
-        ])
-        logging.info(f"Sitemap URLs discovered for job {self.job_id}: {sitemap_urls}")
+        ]
+        
+        for url in potential_sitemaps:
+            if url not in sitemap_urls:
+                sitemap_urls.append(url)
+        
+        logging.info(f"Sitemap URLs to check for job {self.job_id}: {sitemap_urls}")
 
         for sitemap_url in sitemap_urls:
             urls_from_sitemap = get_urls_from_sitemap(self.driver, sitemap_url, sitemap_limit=self.sitemap_limit)
-            logging.info(f"Discovered {len(urls_from_sitemap)} URLs from sitemap {sitemap_url}")
-            self.urls_to_visit.extend(urls_from_sitemap)
+            if urls_from_sitemap:
+                logging.info(f"Discovered {len(urls_from_sitemap)} URLs from sitemap {sitemap_url}")
+                self.urls_to_visit.extend(urls_from_sitemap)
 
     def _filter_and_sort_urls(self):
         """Filters discovered URLs to the base domain and sorts them by likelihood."""
