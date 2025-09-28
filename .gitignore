@@ -1,0 +1,46 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment files
+.env
+venv
+.coverage
+.vscode
+
+# Test Files
+backend/scripts/sales_navigator_scrape/testfile.py
+testfile.py
+test2.py
+
+# Postman collection
+n8n_backend_Collection.postman_collection.json
+
+
+# Log files
+*.log
+backend/log_files/
+
+# Temporary files
+backend/temp/
+
+# Leads Data — ignore all CSVs, keep folders
+*.csv
+!*/.gitkeep
+
+# Ignore driver and browser binaries
+config/drivers/
+config/tor/
+config/chrome_profiles/
+
+# VS Code workspace file
+outreach_system.code-workspace
+
+test2.py
+testfile.py
+/main.py
+/project_structure.py
+directory_tree.txt
+directory_tree_2.txt
