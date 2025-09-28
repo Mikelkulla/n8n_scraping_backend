@@ -5,7 +5,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".
 
 from flask import Flask, render_template
 from backend.routes.api import api_bp
-from backend.config import Config
+from backend.app_settings import Config
 from config.logging import setup_logging
 
 app = Flask(__name__, template_folder="../templates", static_folder="../static")

@@ -3,11 +3,10 @@ from .sitemap_parser import get_robots_txt_urls, get_urls_from_sitemap
 from .page_scraper import scrape_page
 from ..selenium.webdriver_manager import WebDriverManager
 from config.job_functions import write_progress, check_stop_signal
-from backend.config import Config
+from backend.app_settings import Config
 import logging
 import concurrent.futures
 import threading
-from itertools import repeat
 
 def sort_urls_by_email_likelihood(urls):
     """Sorts a list of URLs based on their likelihood of containing contact information.

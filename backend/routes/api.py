@@ -4,13 +4,14 @@ import json
 import threading
 import uuid
 import requests
-from backend.config import Config
+from backend.app_settings import Config
 from backend.scripts.scraping.scrape_for_email import scrape_emails
 from config.job_functions import write_progress
 from backend.scripts.google_api.google_places import call_google_places_api
 from backend.database import Database
 import logging
-from config.utils import validate_emails, validate_url, poll_job_progress, read_job_results
+from config.logging import log_function_call
+from config.utils import validate_emails, validate_url
 
 api_bp = Blueprint("api", __name__)
 
@@ -34,6 +35,7 @@ def start_job_thread(job_id, step_id, task):
     thread.start()
 
 @api_bp.route("/scrape/website-emails", methods=["POST"])
+@log_function_call
 def start_scrape():
     """API endpoint to start a synchronous email scraping job.
 
@@ -110,6 +112,7 @@ def start_scrape():
         return jsonify({"error": str(e), "job_id": job_id}), 500
 
 @api_bp.route("/scrape/google-maps", methods=["POST"])
+@log_function_call
 def google_maps_scrape():
     """API endpoint to start a Google Maps scraping job.
 
@@ -126,7 +129,14 @@ def google_maps_scrape():
             Defaults to 20.
 
     Returns:
-        A JSON response with the job_id and a "started" status, or an error
+        A JSON response with the job_id and 
+                # ✅ Return results for synchronous usage
+        return jsonify({
+            "job_id": job_id,
+            "input": f"{place_type}:{location}",
+            "status": "completed",
+            "leads": leads
+        }), 200a "started" status, or an error
         message.
     """
     try:
@@ -165,14 +175,23 @@ def google_maps_scrape():
                 final_lead_count = len(leads)
                 write_progress(job_id, step_id, input=None, status="completed", total_rows=final_lead_count)
                 logging.info(f"Google Maps scrape job {job_id} completed. Found {final_lead_count} leads.")
+                        # ✅ Return results for synchronous usage
+                return jsonify({
+                    "job_id": job_id,
+                    "input": f"{place_type}:{location}",
+                    "status": "completed",
+                    "leads": leads
+                }), 200
             except Exception as e:
                 logging.error(f"Google Maps scrape job {job_id} failed: {e}")
                 write_progress(job_id, step_id, input=f"{place_type}:{location}", status="failed", stop_call=True, error_message=str(e))
-            finally:
-                active_jobs.pop(job_id, None)
+                return jsonify({"error": str(e)}), 500
+            # finally:
+            #     active_jobs.pop(job_id, None)
 
-        start_job_thread(job_id, step_id, scrape_task)
-        return jsonify({"job_id": job_id, "status": "started", "input": location}), 202
+        # start_job_thread(job_id, step_id, scrape_task)
+        response, status_code = scrape_task()
+        return response, status_code
 
     except Exception as e:
         logging.error(f"Error starting Google Maps scrape job: {e}")
@@ -182,6 +201,7 @@ def google_maps_scrape():
         return jsonify({"error": str(e)}), 500
 
 @api_bp.route("/progress/<job_id>", methods=["GET"])
+@log_function_call
 def get_progress(job_id):
     """API endpoint to retrieve the progress of a scraping job.
 
@@ -221,6 +241,7 @@ def get_progress(job_id):
         return jsonify({"error": str(e)}), 500
 
 @api_bp.route("/stop/<job_id>", methods=["POST"])
+@log_function_call
 def stop_scrape(job_id):
     """API endpoint to stop a running scraping job.
 
@@ -298,6 +319,7 @@ def stop_scrape(job_id):
 
 # This endpoint use scraping.db database's leads table to fill the email fields by scraping emails using website-emails endpoint
 @api_bp.route("/scrape/leads-emails", methods=["POST"])
+@log_function_call
 def scrape_leads_emails():
     """API endpoint to scrape emails for all unscraped leads in the database.
 

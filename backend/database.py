@@ -2,8 +2,10 @@ import sqlite3
 import os
 import logging
 import threading
-from backend.config import Config
+from backend.app_settings import Config
+from config.logging import log_all_methods
 
+@log_all_methods
 class Database:
     """Manages the application's SQLite database connection and operations.
 

@@ -2,7 +2,118 @@ from datetime import datetime
 import logging
 import os
 from logging.handlers import RotatingFileHandler
-from backend.config import Config
+from backend.app_settings import Config
+import functools
+import json
+
+def log_function_call(func):
+    """A decorator to log function calls, arguments, and return values.
+
+    This decorator logs the entry and exit of a function, including its
+    arguments and return value. This is useful for debugging and tracing the
+    flow of execution.
+
+    Args:
+        func (callable): The function to be decorated.
+
+    Returns:
+        callable: The wrapped function.
+    """
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        # Log function entry with arguments
+        # Exclude 'self' from args to avoid redundant logging
+        args_repr = [
+            repr(a) for a in args
+            if not (hasattr(a, "__class__")
+                    and a.__class__.__name__ == func.__qualname__.split(".")[0])
+        ]
+        kwargs_repr = [f"{k}={v!r}" for k, v in kwargs.items()]
+        signature = ", ".join(args_repr + kwargs_repr)
+
+        # Check if the function is a method of a class
+        if "." in func.__qualname__:
+            class_name, method_name = func.__qualname__.rsplit(".", 1)
+            log_message = f"Calling {class_name}.{method_name}({signature})"
+        else:
+            log_message = f"Calling {func.__name__}({signature})"
+        logging.debug(log_message)
+
+        # Execute the function
+        try:
+            result = func(*args, **kwargs)
+
+            # --- Handle Flask/FastAPI responses ---
+            if hasattr(result, "status_code"):
+                headers = dict(getattr(result, "headers", {}))
+                body = result.get_data(as_text=True) if hasattr(result, "get_data") else str(result)
+
+                # Try to pretty-print JSON body if possible
+                try:
+                    body = json.dumps(json.loads(body), indent=2, ensure_ascii=False)
+                except Exception:
+                    pass  # fallback: raw body string
+
+                headers_str = "\n".join(f"{k}: {v}" for k, v in headers.items())
+                log_text = {
+                    "function_name": f"{func.__qualname__} returned:\n",
+                    "status": f"\nRESPONSE STATUS {result.status_code}\n",
+                    "headers": f"RESPONSE HEADERS\n{headers_str}\n",
+                    "body" :f"\nRESPONSE BODY\n{body}"
+                }
+                logging.debug(f"{log_text.get('function_name')}")
+                logging.info(f"{log_text.get('status')}{log_text.get('headers')}")
+                logging.debug(f"{log_text.get('body')}")
+            elif isinstance(result, tuple) and hasattr(result[0], "status_code"):
+                resp_obj, status = result
+                headers = dict(getattr(resp_obj, "headers", {}))
+                body = resp_obj.get_data(as_text=True)
+
+                try:
+                    body = json.dumps(json.loads(body), indent=2, ensure_ascii=False)
+                except Exception:
+                    pass
+
+                headers_str = "\n".join(f"{k}: {v}" for k, v in headers.items())
+                log_text = {
+                    "function_name": f"{func.__qualname__} returned:\n",
+                    "status": f"\nRESPONSE STATUS {status}\n",
+                    "headers": f"RESPONSE HEADERS\n{headers_str}\n",
+                    "body": f"\nRESPONSE BODY\n{body}"
+                }
+                logging.debug(f"{log_text.get('function_name')}")
+                logging.info(f"{log_text.get('status')}{log_text.get('headers')}")
+                logging.debug(f"{log_text.get('body')}")
+
+            else:
+                # Normal function
+                logging.debug(f"{func.__qualname__} returned {result!r}")
+
+            return result
+
+        except Exception as e:
+            logging.error(f"Exception in {func.__qualname__}: {e}", exc_info=True)
+            raise
+
+    return wrapper
+
+def log_all_methods(cls):
+    """A class decorator to apply the log_function_call decorator to all methods.
+
+    This decorator iterates over the attributes of a class and wraps any
+    callable (i.e., method) with the `log_function_call` decorator. This allows
+    for automatic logging of all methods in a class.
+
+    Args:
+        cls (type): The class to be decorated.
+
+    Returns:
+        type: The decorated class.
+    """
+    for attr_name, value in cls.__dict__.items():
+        if callable(value):
+            setattr(cls, attr_name, log_function_call(value))
+    return cls
 
 # Custom RotatingFileHandler to rename rotated files with end timestamp
 class TimestampedRotatingFileHandler(RotatingFileHandler):
