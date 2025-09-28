@@ -2,7 +2,7 @@ import os
 import json
 import logging
 import time
-from backend.config import Config
+from backend.app_settings import Config
 from backend.database import Database
 
 # Modifying the job processes in the Database. (New Logic)

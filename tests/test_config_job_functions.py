@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 from config.job_functions import write_progress, update_job_status, check_stop_signal
-from backend.config import Config
+from backend.app_settings import Config
 
 @pytest.fixture
 def temp_dir(tmp_path):

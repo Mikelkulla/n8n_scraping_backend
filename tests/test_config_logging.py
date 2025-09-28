@@ -3,14 +3,12 @@ import os
 import pytest
 import logging
 from datetime import datetime
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 # Add the project root to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from config.logging import setup_logging, TimestampedRotatingFileHandler
-from backend.config import Config
-
 
 @pytest.fixture(autouse=True)
 def reset_logging():

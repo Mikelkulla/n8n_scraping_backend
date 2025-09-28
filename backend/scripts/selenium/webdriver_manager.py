@@ -8,7 +8,7 @@ from selenium.webdriver.chrome.service import Service
 from selenium.common.exceptions import WebDriverException
 from selenium.webdriver.firefox.service import Service as FirefoxService
 from fake_useragent import UserAgent
-from backend.config import Config
+from backend.app_settings import Config
 
 class WebDriverManager:
     """Manages the lifecycle of a Selenium WebDriver instance.

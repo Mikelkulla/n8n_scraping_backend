@@ -3,7 +3,7 @@ import requests
 import sqlite3
 import time
 from geopy.geocoders import Nominatim
-from backend.config import Config
+from backend.app_settings import Config
 from backend.database import Database
 import logging
 
