@@ -1,4 +1,6 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, Response
+import csv
+import io
 import os
 import json
 import threading
@@ -6,7 +8,7 @@ import uuid
 import requests
 from backend.app_settings import Config
 from backend.scripts.scraping.scrape_for_email import scrape_emails
-from config.job_functions import write_progress
+from config.job_functions import write_progress, check_stop_signal
 from backend.scripts.google_api.google_places import call_google_places_api
 from backend.database import Database
 import logging
@@ -114,30 +116,19 @@ def start_scrape():
 @api_bp.route("/scrape/google-maps", methods=["POST"])
 @log_function_call
 def google_maps_scrape():
-    """API endpoint to start a Google Maps scraping job.
+    """API endpoint to start a synchronous Google Maps scraping job.
 
-    This endpoint initiates a background job to search for places on Google Maps
-    based on a location and place type. The job runs asynchronously, and the
-    results are stored in the database.
+    Searches for places on Google Maps by location and type, stores results in
+    the database, and returns the leads directly in the response.
 
     Request JSON Body:
-        location (str): The location to search for (e.g., "Sarande, Albania").
-        radius (int, optional): The search radius in meters. Defaults to 300.
-        place_type (str, optional): The type of place to search for (e.g.,
-            "lodging", "restaurant"). Defaults to "lodging".
-        max_places (int, optional): The maximum number of places to retrieve.
-            Defaults to 20.
+        location (str): The location to search (e.g., "Sarande, Albania").
+        radius (int, optional): Search radius in metres. Defaults to 300.
+        place_type (str, optional): Google place type (e.g., "lodging"). Defaults to "lodging".
+        max_places (int, optional): Maximum number of places to retrieve. Defaults to 20.
 
     Returns:
-        A JSON response with the job_id and 
-                # ✅ Return results for synchronous usage
-        return jsonify({
-            "job_id": job_id,
-            "input": f"{place_type}:{location}",
-            "status": "completed",
-            "leads": leads
-        }), 200a "started" status, or an error
-        message.
+        200 JSON with job_id, status "completed", and leads list, or 400/500 on error.
     """
     try:
         data = request.get_json()
@@ -145,8 +136,7 @@ def google_maps_scrape():
             return jsonify({"error": "Missing 'location' in request body"}), 400
 
         location = data["location"]
-        # Validate location (basic check for non-empty string with letters)
-        if not isinstance(location, str): # or not re.match(r"^[a-zA-Z\s,]+$", location):
+        if not isinstance(location, str) or not location.strip():
             return jsonify({"error": "Invalid location format"}), 400
 
         radius = data.get("radius", 300)
@@ -155,49 +145,27 @@ def google_maps_scrape():
 
         job_id = str(uuid.uuid4())
         step_id = "google_maps_scrape"
+        job_input = f"{place_type}:{location}"
 
-        # Initialize progress in database
-        write_progress(job_id, step_id, input=f"{place_type}:{location}", status="running", total_rows=max_places)
+        write_progress(job_id, step_id, input=job_input, status="running", total_rows=max_places)
+        logging.info(f"Starting Google Maps scrape job {job_id} for '{job_input}'")
 
-        # Start Google Maps scraping in a separate thread
-        def scrape_task():
-            try:
-                logging.info(f"Starting Google Maps scrape job {job_id} for location: {location}")
-                leads = call_google_places_api(job_id, step_id, location, radius, place_type, max_places)
+        leads = call_google_places_api(job_id, step_id, location, radius, place_type, max_places)
 
-                # Save results to a file
-                result_file = os.path.join(Config.TEMP_PATH, f"results_{step_id}_{job_id}.json")
-                os.makedirs(Config.TEMP_PATH, exist_ok=True)
-                with open(result_file, "w") as f:
-                    json.dump({"job_id": job_id, "input": f"{place_type}:{location}", "leads": leads}, f, indent=2)
+        final_count = len(leads)
+        write_progress(job_id, step_id, input=job_input, status="completed",
+                       current_row=final_count, total_rows=final_count)
+        logging.info(f"Google Maps job {job_id} completed — {final_count} leads found.")
 
-                # Use the actual number of leads found for progress update
-                final_lead_count = len(leads)
-                write_progress(job_id, step_id, input=None, status="completed", total_rows=final_lead_count)
-                logging.info(f"Google Maps scrape job {job_id} completed. Found {final_lead_count} leads.")
-                        # ✅ Return results for synchronous usage
-                return jsonify({
-                    "job_id": job_id,
-                    "input": f"{place_type}:{location}",
-                    "status": "completed",
-                    "leads": leads
-                }), 200
-            except Exception as e:
-                logging.error(f"Google Maps scrape job {job_id} failed: {e}")
-                write_progress(job_id, step_id, input=f"{place_type}:{location}", status="failed", stop_call=True, error_message=str(e))
-                return jsonify({"error": str(e)}), 500
-            # finally:
-            #     active_jobs.pop(job_id, None)
-
-        # start_job_thread(job_id, step_id, scrape_task)
-        response, status_code = scrape_task()
-        return response, status_code
+        return jsonify({
+            "job_id": job_id,
+            "input": job_input,
+            "status": "completed",
+            "leads": leads
+        }), 200
 
     except Exception as e:
-        logging.error(f"Error starting Google Maps scrape job: {e}")
-        job_id = job_id if 'job_id' in locals() else str(uuid.uuid4())
-        step_id = "google_maps_scrape"
-        write_progress(job_id, step_id, input=f"{place_type}:{location}" if 'location' in locals() and 'place_type' in locals() else "unknown", status="failed", stop_call=True, error_message=str(e))
+        logging.error(f"Google Maps scrape job failed: {e}")
         return jsonify({"error": str(e)}), 500
 
 @api_bp.route("/progress/<job_id>", methods=["GET"])
@@ -217,8 +185,8 @@ def get_progress(job_id):
     """
     try:
         with Database() as db:
-            # Try both possible step_ids
-            for step_id in ["email_scrape", "google_maps_scrape"]:
+            # Try all known step_ids
+            for step_id in ["email_scrape", "google_maps_scrape", "leads_email_scrape"]:
                 progress = db.get_job_execution(job_id, step_id)
                 if progress:
                     return jsonify({
@@ -260,7 +228,7 @@ def stop_scrape(job_id):
         step_id = None
         with Database() as db:
             # Check which type of job this is by looking it up in the database
-            for possible_step_id in ["email_scrape", "google_maps_scrape"]:
+            for possible_step_id in ["email_scrape", "google_maps_scrape", "leads_email_scrape"]:
                 if db.get_job_execution(job_id, possible_step_id):
                     step_id = possible_step_id
                     break
@@ -317,16 +285,14 @@ def stop_scrape(job_id):
         logging.error(f"Error stopping job {job_id}: {e}")
         return jsonify({"error": str(e)}), 500
 
-# This endpoint use scraping.db database's leads table to fill the email fields by scraping emails using website-emails endpoint
 @api_bp.route("/scrape/leads-emails", methods=["POST"])
 @log_function_call
 def scrape_leads_emails():
-    """API endpoint to scrape emails for all unscraped leads in the database.
+    """API endpoint to asynchronously scrape emails for all unscraped leads.
 
-    This endpoint retrieves all leads from the database that have a website but
-    have not yet been scraped for emails. It then iterates through each lead,
-    calling the `/scrape/website-emails` endpoint for each one, and updates the
-    lead's record with the found emails.
+    Fetches leads that have a website but no scraped emails, spawns a background
+    thread to process them, and returns immediately with a job_id.
+    Poll GET /api/progress/<job_id> to track progress and completion.
 
     Request JSON Body:
         max_pages (int, optional): Max pages to scrape per website. Defaults to 30.
@@ -334,186 +300,160 @@ def scrape_leads_emails():
         headless (bool, optional): Whether to run in headless mode. Defaults to True.
 
     Returns:
-        A JSON response summarizing the results of the scraping jobs for each lead.
+        202 JSON with job_id, status "started", and total_leads count.
+        200 JSON with message if no unscraped leads are found.
+        500 on unexpected error.
     """
     try:
         data = request.get_json() or {}
-        max_pages = data.get("max_pages", 30)  # Default to 30 pages
-        use_tor = data.get("use_tor", False)   # Default to False
-        headless = data.get("headless", True)  # Default to True
+        max_pages = data.get("max_pages", 30)
+        use_tor = data.get("use_tor", False)
+        headless = data.get("headless", True)
 
-        # Fetch leads from the database by default
+        # Fetch unscraped leads before spawning the thread
         with Database() as db:
             leads = db.get_leads(status_filter="NOT scraped")
 
-        # For testing only (override with hardcoded leads if TEST_MODE is set)
-        if os.getenv("TEST_MODE") == "true":
-            leads = [
-                {
-                    'lead_id': 543, 
-                    'job_id': 'a88b3c6b-023a-4e63-b690-0e16e3cd5f2e', 
-                    'place_id': 'ChIJg5a-uVXAwoARXHDwQRVHnh4', 
-                    'location': 'dental_clinic:North Los Angeles', 
-                    'name': 'ProDent Care: Tereza Hambarchian, DDS', 
-                    'address': '213 N Orange St F, Glendale, CA 91203, USA', 
-                    'phone': '+1 818-296-0916', 
-                    'website': 'http://www.prodentcare.com', 
-                    'emails': None, 
-                    'created_at': '2025-08-11 20:51:52', 
-                    'updated_at': '2025-08-11 20:51:52', 
-                    'status': 'scraped'
-                },
-                {
-                    'lead_id': 386, 
-                    'job_id': '36d59700-c05a-4955-a94e-7b7af9ac65c9', 
-                    'place_id': 'ChIJlxusK0-3woARG9AAHdBJhpE', 
-                    'location': 'dental_clinic:North Los Angeles', 
-                    'name': 'Smile L.A. Downtown Modern Dentistry',
-                    'address': '523 W 6th St #202, Los Angeles, CA 90014, USA', 
-                    'phone': '+1 213-286-0020', 
-                    'website': 'https://smilela.com', 
-                    'emails': None, 
-                    'created_at': '2025-08-11 20:51:45', 
-                    'updated_at': '2025-08-04 12:24:46', 
-                    'status': None
-                }
-            ]
         if not leads:
-            return jsonify({"error": "No leads found in the database"}), 404
+            return jsonify({"message": "No unscraped leads found.", "count": 0}), 200
 
-        # Initialize results
-        results = []
-        base_url = os.getenv("BASE_URL")  # Adjust if your API runs elsewhere
+        job_id = str(uuid.uuid4())
+        step_id = "leads_email_scrape"
+        total = len(leads)
+        job_input = f"{total} leads"
 
-        for lead in leads:
-            website = lead.get("website")
-            if not website:
-                logging.warning(f"Lead {lead.get('lead_id', 'unknown')} has no website, skipping.")
-                try:
-                    with Database() as db:
-                        db.update_lead(
-                            place_id=lead.get("place_id"),
-                            execution_id=lead.get("execution_id"),
-                            status="skipped"
-                        )
-                    logging.info(f"Updated lead {lead.get('lead_id')} status to 'skipped' in DB.")
-                except Exception as e:
-                    logging.error(f"Failed to update status for lead {lead.get('lead_id')} to 'skipped': {e}")
+        # Register job immediately so /progress returns a result right away
+        write_progress(job_id, step_id, input=job_input, status="running", total_rows=total)
 
-                results.append({
-                    "lead_id": lead.get("lead_id", "unknown"),
-                    "website": None,
-                    "job_id": None,
-                    "status": "skipped",
-                    "emails": [],
-                    "error": "No website provided"
-                })
-                continue
-
-            # Validate and normalize website URL
-            website, error = validate_url(website)
-            if error:
-                logging.info(f"Invalid website URL for lead {lead.get('lead_id', 'unknown')}: {error}")
-                try:
-                    with Database() as db:
-                        db.update_lead(
-                            place_id=lead.get("place_id"),
-                            execution_id=lead.get("execution_id"),
-                            status="failed"
-                        )
-                    logging.info(f"Updated lead {lead.get('lead_id')} status to 'failed' in DB.")
-                except Exception as e:
-                    logging.error(f"Failed to update status for lead {lead.get('lead_id')} to 'failed': {e}")
-
-                results.append({
-                    "lead_id": lead.get("lead_id", "unknown"),
-                    "website": website,
-                    "job_id": None,
-                    "status": "failed",
-                    "emails": [],
-                    "error": error
-                })
-                continue
-
-            # Start scraping job for the lead's website
-            scrape_payload = {
-                "url": website,
-                "max_pages": max_pages,
-                "use_tor": use_tor,
-                "headless": headless
-            }
+        def scrape_task():
+            processed = 0
             try:
-                # The /scrape/website-emails endpoint is now synchronous and returns results directly
-                response = requests.post(f"{base_url}/scrape/website-emails", json=scrape_payload, timeout=300) # 5-minute timeout
-                
-                job_data = response.json()
-                job_id = job_data.get("job_id")
-                status = job_data.get("status")
+                for lead in leads:
+                    # Check stop signal before each lead
+                    if check_stop_signal(step_id):
+                        logging.info(f"Stop signal received for job {job_id} after {processed}/{total} leads.")
+                        write_progress(job_id, step_id, input=job_input, status="stopped",
+                                       current_row=processed, total_rows=total)
+                        return
 
-                if response.status_code != 200 or status != "completed":
-                    error_message = job_data.get("error", "Scrape job did not complete successfully")
-                    logging.error(f"Failed to scrape emails for {website}: {error_message}")
-                    results.append({
-                        "lead_id": lead.get("lead_id", "unknown"),
-                        "website": website,
-                        "job_id": job_id,
-                        "status": status or "failed",
-                        "emails": [],
-                        "error": error_message
-                    })
-                    continue
+                    lead_id = lead.get("lead_id", "unknown")
+                    place_id = lead.get("place_id")
+                    execution_id = lead.get("execution_id")
+                    website = lead.get("website")
 
-                logging.info(f"Scrape job {job_id} for {website} completed.")
-                
-                # Get emails from the response and validate them
-                emails = validate_emails(job_data.get("emails", []))
+                    if not website:
+                        logging.warning(f"Lead {lead_id} has no website — skipping.")
+                        try:
+                            with Database() as db:
+                                db.update_lead(place_id=place_id, execution_id=execution_id, status="skipped")
+                        except Exception as e:
+                            logging.error(f"Failed to mark lead {lead_id} as skipped: {e}")
+                        processed += 1
+                        write_progress(job_id, step_id, input=job_input,
+                                       current_row=processed, total_rows=total)
+                        continue
 
-                # Update the database with the emails
-                try:
-                    with Database() as db:
-                        emails_str = ','.join(emails) if emails else None
-                        db.update_lead(
-                            place_id=lead['place_id'],
-                            execution_id=lead['execution_id'],
-                            emails=emails_str,
-                            status='scraped'
+                    validated_url, url_error = validate_url(website)
+                    if url_error:
+                        logging.warning(f"Lead {lead_id} has invalid URL ({website}): {url_error}")
+                        try:
+                            with Database() as db:
+                                db.update_lead(place_id=place_id, execution_id=execution_id, status="failed")
+                        except Exception as e:
+                            logging.error(f"Failed to mark lead {lead_id} as failed: {e}")
+                        processed += 1
+                        write_progress(job_id, step_id, input=job_input,
+                                       current_row=processed, total_rows=total)
+                        continue
+
+                    # Scrape emails directly — avoids internal HTTP overhead and BASE_URL dependency
+                    sub_job_id = str(uuid.uuid4())
+                    try:
+                        logging.info(f"Scraping emails for lead {lead_id} ({validated_url})")
+                        emails = scrape_emails(
+                            sub_job_id,
+                            "email_scrape",
+                            validated_url,
+                            max_pages=max_pages,
+                            use_tor=use_tor,
+                            headless=headless,
+                            sitemap_limit=10
                         )
-                        logging.info(f"Updated emails in DB for lead {lead['lead_id']}")
-                        results.append({
-                            "lead_id": lead.get("lead_id", "unknown"),
-                            "website": website,
-                            "job_id": job_id,
-                            "status": "completed",
-                            "emails": emails,
-                            "error": None if emails else "No valid emails found"
-                        })
-                except Exception as db_err:
-                    logging.error(f"Failed to update DB for lead {lead['lead_id']}: {db_err}")
-                    results.append({
-                        "lead_id": lead.get("lead_id", "unknown"),
-                        "website": website,
-                        "job_id": job_id,
-                        "status": "completed",
-                        "emails": emails,
-                        "error": f"Database update failed: {str(db_err)}"
-                    })
+                        valid_emails = validate_emails(emails)
+                        emails_str = ','.join(valid_emails) if valid_emails else None
+                        with Database() as db:
+                            db.update_lead(place_id=place_id, execution_id=execution_id,
+                                           emails=emails_str, status="scraped")
+                        logging.info(f"Lead {lead_id}: stored {len(valid_emails)} email(s).")
+                    except Exception as e:
+                        logging.error(f"Failed to scrape lead {lead_id} ({validated_url}): {e}")
+                        try:
+                            with Database() as db:
+                                db.update_lead(place_id=place_id, execution_id=execution_id, status="failed")
+                        except Exception as db_err:
+                            logging.error(f"Failed to mark lead {lead_id} as failed in DB: {db_err}")
 
-            except requests.RequestException as e:
-                logging.error(f"Error initiating scrape job for {website}: {e}")
-                results.append({
-                    "lead_id": lead.get("lead_id", "unknown"),
-                    "website": website,
-                    "job_id": None,
-                    "status": "failed",
-                    "emails": [],
-                    "error": f"Failed to initiate scrape job: {str(e)}"
-                })
+                    processed += 1
+                    write_progress(job_id, step_id, input=job_input,
+                                   current_row=processed, total_rows=total)
 
-        return jsonify({
-            "status": "completed",
-            "results": results
-        }), 200
+                write_progress(job_id, step_id, input=job_input, status="completed",
+                               current_row=total, total_rows=total)
+                logging.info(f"Leads email scrape job {job_id} completed — {total} leads processed.")
+
+            except Exception as e:
+                logging.error(f"Leads email scrape job {job_id} failed: {e}")
+                write_progress(job_id, step_id, input=job_input, status="failed",
+                               current_row=processed, total_rows=total, error_message=str(e))
+            finally:
+                active_jobs.pop(job_id, None)
+
+        start_job_thread(job_id, step_id, scrape_task)
+        logging.info(f"Leads email scrape job {job_id} started — {total} leads queued.")
+        return jsonify({"job_id": job_id, "status": "started", "total_leads": total}), 202
 
     except Exception as e:
-        logging.error(f"Error in scrape_leads_emails: {e}")
+        logging.error(f"Error starting leads email scrape: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/leads/export", methods=["GET"])
+@log_function_call
+def export_leads():
+    """Exports fully scraped leads that have at least a phone number or email as CSV.
+
+    Query Parameters:
+        format (str, optional): Response format — "csv" (default) or "json".
+
+    Returns:
+        A CSV file download or a JSON array of leads.
+    """
+    try:
+        with Database() as db:
+            leads = db.get_export_leads()
+
+        if not leads:
+            return jsonify({"message": "No leads available for export.", "count": 0}), 200
+
+        fmt = request.args.get("format", "csv").lower()
+
+        if fmt == "json":
+            return jsonify({"count": len(leads), "leads": leads}), 200
+
+        # CSV export
+        fields = ["lead_id", "name", "location", "address", "phone", "website", "emails", "status", "created_at"]
+        output = io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(leads)
+
+        logging.info(f"Exported {len(leads)} leads as CSV")
+        return Response(
+            output.getvalue(),
+            mimetype="text/csv",
+            headers={"Content-Disposition": "attachment; filename=leads_export.csv"}
+        )
+
+    except Exception as e:
+        logging.error(f"Error exporting leads: {e}")
         return jsonify({"error": str(e)}), 500
