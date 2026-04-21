@@ -1,0 +1,234 @@
+{
+  "name": "Scrape Leads Emails",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "node-001",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:5000/api/scrape/leads-emails",
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={\n  \"max_pages\": 30,\n  \"use_tor\": false,\n  \"headless\": true\n}",
+        "options": {}
+      },
+      "id": "node-002",
+      "name": "Start Scrape Job",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [460, 300],
+      "notes": "Returns immediately with job_id. Does NOT block."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Creates 80 poll slots (80 x 15s = 20 min max).\n// No HTTP calls here — just data.\nconst jobId = $input.first().json.job_id;\nif (!jobId) throw new Error('No job_id returned from Start Scrape Job');\n\nreturn Array.from({ length: 80 }, (_, i) => ({\n  json: { attempt: i + 1, job_id: jobId }\n}));"
+      },
+      "id": "node-003",
+      "name": "Create Poll Slots",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300],
+      "notes": "Creates 80 items (one per poll attempt). No HTTP calls."
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "node-004",
+      "name": "Loop Over Items",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "amount": 15,
+        "unit": "seconds"
+      },
+      "id": "node-005",
+      "name": "Wait 15s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [1100, 200],
+      "webhookId": "wait-webhook-001"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://127.0.0.1:5000/api/progress/{{ $json.job_id }}",
+        "options": {}
+      },
+      "id": "node-006",
+      "name": "Check Progress",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1300, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-terminal",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "completed",
+              "operator": { "type": "string", "operation": "equals" }
+            },
+            {
+              "id": "cond-failed",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "failed",
+              "operator": { "type": "string", "operation": "equals" }
+            },
+            {
+              "id": "cond-stopped",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "stopped",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "or"
+        }
+      },
+      "id": "node-007",
+      "name": "Is Terminal?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1500, 200],
+      "notes": "TRUE = job finished (any terminal status). FALSE = still running, loop back."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-completed",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "completed",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "node-008",
+      "name": "Completed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1700, 100]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://127.0.0.1:5000/api/leads/export",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "format", "value": "json" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-009",
+      "name": "Export Enriched Leads",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1900, 0],
+      "notes": "Returns scraped leads that have at least a phone or email."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "err-001",
+              "name": "status",
+              "value": "={{ $json.status }}",
+              "type": "string"
+            },
+            {
+              "id": "err-002",
+              "name": "error_message",
+              "value": "={{ $json.error_message ?? 'Job did not complete successfully' }}",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "node-010",
+      "name": "Handle Error",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [1900, 200]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [{ "node": "Start Scrape Job", "type": "main", "index": 0 }]
+      ]
+    },
+    "Start Scrape Job": {
+      "main": [
+        [{ "node": "Create Poll Slots", "type": "main", "index": 0 }]
+      ]
+    },
+    "Create Poll Slots": {
+      "main": [
+        [{ "node": "Loop Over Items", "type": "main", "index": 0 }]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [{ "node": "Wait 15s", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Wait 15s": {
+      "main": [
+        [{ "node": "Check Progress", "type": "main", "index": 0 }]
+      ]
+    },
+    "Check Progress": {
+      "main": [
+        [{ "node": "Is Terminal?", "type": "main", "index": 0 }]
+      ]
+    },
+    "Is Terminal?": {
+      "main": [
+        [{ "node": "Completed?", "type": "main", "index": 0 }],
+        [{ "node": "Loop Over Items", "type": "main", "index": 0 }]
+      ]
+    },
+    "Completed?": {
+      "main": [
+        [{ "node": "Export Enriched Leads", "type": "main", "index": 0 }],
+        [{ "node": "Handle Error", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateId": "scrape-leads-emails-v3-node-loop"
+  }
+}

@@ -55,7 +55,7 @@ This table stores the business data collected from Google Maps scraping jobs.
 | Column       | Type      | Description                                                               |
 | ------------ | --------- | ------------------------------------------------------------------------- |
 | `lead_id`    | `INTEGER` | **Primary Key.** A unique identifier for each lead.                         |
-| `job_id`     | `TEXT`    | **Foreign Key** to `job_executions`, linking the lead to a specific job.    |
+| `execution_id` | `INTEGER` | **Foreign Key** to `job_executions(execution_id)`, linking the lead to a specific job. |
 | `place_id`   | `TEXT`    | The unique ID of the place from Google Maps, used to prevent duplicates.  |
 | `location`   | `TEXT`    | The location that was searched (e.g., "Sarande, Albania").                  |
 | `name`       | `TEXT`    | The name of the business.                                                 |
@@ -186,6 +186,6 @@ To run this project, follow these steps:
 
 5.  **Run the application:**
     ```bash
-    python backend/app.py
+    python -m backend.app
     ```
     The application will start on `http://localhost:5000`.

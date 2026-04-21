@@ -354,6 +354,31 @@ class Database:
             logging.error(f"Failed to update lead for place {place_id}: {e}")
             raise
 
+    def get_export_leads(self):
+        """Retrieves fully scraped leads that have at least a phone number or email.
+
+        Returns:
+            list[dict]: Leads with status='scraped' and at least one contact method.
+        """
+        try:
+            self.cursor.execute("""
+                SELECT l.lead_id, l.location, l.name, l.address, l.phone,
+                       l.website, l.emails, l.status, l.created_at
+                FROM leads l
+                WHERE l.status = 'scraped'
+                  AND (
+                      (l.phone IS NOT NULL AND TRIM(l.phone) != '')
+                      OR
+                      (l.emails IS NOT NULL AND TRIM(l.emails) != '')
+                  )
+                ORDER BY l.created_at DESC
+            """)
+            rows = self.cursor.fetchall()
+            return [dict(row) for row in rows] if rows else []
+        except sqlite3.Error as e:
+            logging.error(f"Failed to fetch export leads: {e}")
+            return []
+
 if __name__ == "__main__":
     with Database() as db:
         leads = db.get_leads()
