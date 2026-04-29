@@ -163,7 +163,7 @@ class EmailScraper:
         Args:
             url (str): The URL to be scraped by the worker.
         """
-        if check_stop_signal(self.step_id):
+        if check_stop_signal(self.job_id, self.step_id):
             return
         
         with self.lock:
@@ -196,7 +196,7 @@ class EmailScraper:
             # Use list to ensure all futures are created before waiting
             futures = list(executor.map(self._scrape_worker, self.urls_to_visit[:self.max_pages]))
 
-        if not check_stop_signal(self.step_id):
+        if not check_stop_signal(self.job_id, self.step_id):
             write_progress(self.job_id, self.step_id, self.base_url, self.max_pages, self.use_tor, self.headless, status="completed", total_rows=self.total_urls)
 
     def _cleanup(self):

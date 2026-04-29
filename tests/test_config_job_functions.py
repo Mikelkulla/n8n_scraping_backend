@@ -4,7 +4,6 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 from config.job_functions import write_progress, update_job_status, check_stop_signal
-from backend.app_settings import Config
 
 @pytest.fixture
 def temp_dir(tmp_path):
@@ -56,7 +55,7 @@ class TestJobFunctions:
 
         mock_db_instance.get_job_execution.assert_called_once_with("job1", "step1")
         mock_db_instance.update_job_execution.assert_called_once_with(
-            "job1", "step1", current_row=50, total_rows=100, status="running", stop_call=False, error_message=None
+            "job1", "step1", current_row=50, total_rows=100, status="running", stop_call=None, error_message=None
         )
         mock_db_instance.insert_job_execution.assert_not_called()
 
@@ -76,7 +75,7 @@ class TestJobFunctions:
         )
 
         mock_db_instance.update_job_execution.assert_called_once_with(
-            "job1", "step1", current_row=100, total_rows=100, status="completed", stop_call=False, error_message=None
+            "job1", "step1", current_row=100, total_rows=100, status="completed", stop_call=None, error_message=None
         )
 
     @patch('config.job_functions.Database')
@@ -166,14 +165,38 @@ class TestJobFunctions:
         update_job_status("step1", "job1", "running")
         mock_print.assert_called_with("Error updating job status for step step1, job job1: File error")
 
-    def test_check_stop_signal_file_exists(self, temp_dir):
-        """Test that check_stop_signal returns True if the stop file exists."""
-        stop_file = os.path.join(temp_dir, "stop_step1.txt")
-        with open(stop_file, "w") as f:
-            f.write("stop")
+    @patch('config.job_functions.Database')
+    def test_check_stop_signal_true_for_matching_job(self, mock_db_class):
+        """Test that check_stop_signal reads the job-scoped DB stop flag."""
+        mock_db_instance = MagicMock()
+        mock_db_instance.get_job_execution.return_value = {
+            "job_id": "job1",
+            "step_id": "step1",
+            "stop_call": True,
+        }
+        mock_db_class.return_value.__enter__.return_value = mock_db_instance
 
-        assert check_stop_signal("step1") is True
+        assert check_stop_signal("job1", "step1") is True
+        mock_db_instance.get_job_execution.assert_called_once_with("job1", "step1")
 
-    def test_check_stop_signal_file_not_exists(self, temp_dir):
-        """Test that check_stop_signal returns False if the stop file does not exist."""
-        assert check_stop_signal("step1") is False
+    @patch('config.job_functions.Database')
+    def test_check_stop_signal_false_for_other_job(self, mock_db_class):
+        """Test that another job with the same step does not stop this job."""
+        mock_db_instance = MagicMock()
+        mock_db_instance.get_job_execution.return_value = {
+            "job_id": "job1",
+            "step_id": "step1",
+            "stop_call": False,
+        }
+        mock_db_class.return_value.__enter__.return_value = mock_db_instance
+
+        assert check_stop_signal("job1", "step1") is False
+        mock_db_instance.get_job_execution.assert_called_once_with("job1", "step1")
+
+    def test_check_stop_signal_with_db_connection(self):
+        """Test that an existing DB connection can be reused."""
+        mock_db_connection = MagicMock()
+        mock_db_connection.get_job_execution.return_value = {"stop_call": 1}
+
+        assert check_stop_signal("job1", "step1", db_connection=mock_db_connection) is True
+        mock_db_connection.get_job_execution.assert_called_once_with("job1", "step1")

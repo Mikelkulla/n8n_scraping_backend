@@ -1,12 +1,8 @@
 from flask import Blueprint, jsonify, request, Response
 import csv
 import io
-import os
-import json
 import threading
 import uuid
-import requests
-from backend.app_settings import Config
 from backend.scripts.scraping.scrape_for_email import scrape_emails
 from config.job_functions import write_progress, check_stop_signal
 from backend.scripts.google_api.google_places import call_google_places_api
@@ -246,14 +242,7 @@ def stop_scrape(job_id):
         if step_id == "google_maps_scrape" and job_id not in active_jobs:
             return jsonify({"error": f"Job {job_id} is not running or already stopped"}), 404
 
-        # Create the stop signal file. The scraping loops check for this file.
-        stop_file = os.path.join(Config.TEMP_PATH, f"stop_{step_id}.txt")
-        os.makedirs(Config.TEMP_PATH, exist_ok=True)
-        with open(stop_file, "w") as f:
-            f.write("stop")
-        logging.info(f"Stop signal file created for job {job_id} (step: {step_id}).")
-
-        # Update job status in the database to "stopped"
+        # Update the job-scoped stop flag in the database.
         with Database() as db:
             progress = db.get_job_execution(job_id, step_id)
             if progress and progress["status"] == "running":
@@ -270,6 +259,7 @@ def stop_scrape(job_id):
                     current_row=progress["current_row"],
                     total_rows=progress["total_rows"]
                 )
+                logging.info(f"Stop signal set for job {job_id} (step: {step_id}).")
 
         # For async jobs, which are in active_jobs, wait for the thread to terminate.
         if job_id in active_jobs:
@@ -330,7 +320,7 @@ def scrape_leads_emails():
             try:
                 for lead in leads:
                     # Check stop signal before each lead
-                    if check_stop_signal(step_id):
+                    if check_stop_signal(job_id, step_id):
                         logging.info(f"Stop signal received for job {job_id} after {processed}/{total} leads.")
                         write_progress(job_id, step_id, input=job_input, status="stopped",
                                        current_row=processed, total_rows=total)
