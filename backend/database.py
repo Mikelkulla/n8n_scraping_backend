@@ -265,6 +265,71 @@ class Database:
             logging.error(f"Failed to fetch leads: {e}")
             return []
 
+    def list_leads(self, status=None, job_id=None, has_email=None, has_website=None):
+        """Retrieves leads for UI listing with optional filters.
+
+        Args:
+            status (str, optional): Exact lead status to match.
+            job_id (str, optional): Parent job UUID to match.
+            has_email (bool, optional): If True, only leads with emails. If False,
+                only leads without emails.
+            has_website (bool, optional): If True, only leads with websites. If
+                False, only leads without websites.
+
+        Returns:
+            list[dict]: Lead rows joined with their parent job metadata.
+        """
+        try:
+            query = """
+                SELECT
+                    l.lead_id,
+                    l.execution_id,
+                    l.place_id,
+                    l.location,
+                    l.name,
+                    l.address,
+                    l.phone,
+                    l.website,
+                    l.emails,
+                    l.status,
+                    l.created_at,
+                    l.updated_at,
+                    j.job_id,
+                    j.step_id,
+                    j.status AS job_status
+                FROM leads l
+                JOIN job_executions j ON l.execution_id = j.execution_id
+                WHERE 1 = 1
+            """
+            params = []
+
+            if status:
+                query += " AND l.status = ?"
+                params.append(status)
+
+            if job_id:
+                query += " AND j.job_id = ?"
+                params.append(job_id)
+
+            if has_email is True:
+                query += " AND l.emails IS NOT NULL AND TRIM(l.emails) != ''"
+            elif has_email is False:
+                query += " AND (l.emails IS NULL OR TRIM(l.emails) = '')"
+
+            if has_website is True:
+                query += " AND l.website IS NOT NULL AND TRIM(l.website) != ''"
+            elif has_website is False:
+                query += " AND (l.website IS NULL OR TRIM(l.website) = '')"
+
+            query += " ORDER BY l.created_at DESC"
+
+            self.cursor.execute(query, params)
+            rows = self.cursor.fetchall()
+            return [dict(row) for row in rows] if rows else []
+        except sqlite3.Error as e:
+            logging.error(f"Failed to list leads: {e}")
+            return []
+
     def insert_lead(self, execution_id, place_id, location=None, name=None, address=None, phone=None, website=None, emails=None):
         """Inserts a new lead record into the database.
 

@@ -21,7 +21,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -218,7 +219,18 @@ input {
   padding: 8px 10px;
 }
 
-input:focus {
+select {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid #cbd4cf;
+  border-radius: 8px;
+  background: #fff;
+  color: #172026;
+  padding: 8px 10px;
+}
+
+input:focus,
+select:focus {
   border-color: #176a73;
   box-shadow: 0 0 0 3px rgba(23, 106, 115, 0.14);
   outline: none;
@@ -424,6 +436,13 @@ td {
   gap: 14px;
 }
 
+.filters {
+  display: grid;
+  grid-template-columns: 150px minmax(220px, 1fr) 150px 150px;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
 .settings-grid div {
   display: grid;
   gap: 4px;
@@ -458,6 +477,7 @@ td {
 
   .grid.two,
   .settings-grid,
+  .filters,
   .form-row {
     grid-template-columns: 1fr;
   }

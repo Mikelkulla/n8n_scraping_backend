@@ -17,9 +17,9 @@ import {
 import { ApiError, type Lead } from "./api";
 import {
   useBackendHealth,
-  useExportLeadsJson,
   useGoogleMapsScrape,
   useJobPolling,
+  useLeads,
   useLeadEmailEnrichment,
   useStopJob,
   useWebsiteEmailScrape,
@@ -478,24 +478,64 @@ function EnrichPage() {
 }
 
 function LeadsPage() {
-  const leads = useExportLeadsJson();
-  const exportLeads = leads.data && "leads" in leads.data ? leads.data.leads : [];
+  const [status, setStatus] = useState("");
+  const [jobId, setJobId] = useState("");
+  const [hasEmail, setHasEmail] = useState("");
+  const [hasWebsite, setHasWebsite] = useState("");
+  const leads = useLeads({
+    status: status || undefined,
+    job_id: jobId || undefined,
+    has_email: hasEmail === "" ? undefined : hasEmail === "true",
+    has_website: hasWebsite === "" ? undefined : hasWebsite === "true",
+  });
 
   return (
     <>
       <PageHeader
         title="Leads"
-        description="Review export-ready leads. The backend currently exposes only scraped leads with phone or email."
+        description="Review all stored leads, filter by status or job, and export contact-ready records."
       />
+      <section className="panel filters">
+        <Field label="Status">
+          <select value={status} onChange={(event) => setStatus(event.target.value)}>
+            <option value="">Any status</option>
+            <option value="scraped">Scraped</option>
+            <option value="failed">Failed</option>
+            <option value="skipped">Skipped</option>
+            <option value="pending">Pending</option>
+          </select>
+        </Field>
+        <Field label="Job ID">
+          <input
+            value={jobId}
+            onChange={(event) => setJobId(event.target.value)}
+            placeholder="Filter by job UUID"
+          />
+        </Field>
+        <Field label="Email">
+          <select value={hasEmail} onChange={(event) => setHasEmail(event.target.value)}>
+            <option value="">Any</option>
+            <option value="true">Has email</option>
+            <option value="false">No email</option>
+          </select>
+        </Field>
+        <Field label="Website">
+          <select value={hasWebsite} onChange={(event) => setHasWebsite(event.target.value)}>
+            <option value="">Any</option>
+            <option value="true">Has website</option>
+            <option value="false">No website</option>
+          </select>
+        </Field>
+      </section>
       <section className="panel">
         <div className="section-head">
           <div>
-            <h2>Export-ready leads</h2>
-            <p>{leads.data?.count ?? 0} contacts available</p>
+            <h2>Stored leads</h2>
+            <p>{leads.data?.count ?? 0} matching records</p>
           </div>
           <button className="secondary" type="button" onClick={() => void downloadExportedLeads()}>
             <Download size={17} />
-            CSV
+            Export CSV
           </button>
         </div>
         {leads.isLoading ? (
@@ -503,7 +543,7 @@ function LeadsPage() {
         ) : leads.isError ? (
           <ErrorAlert error={leads.error} />
         ) : (
-          <LeadsTable leads={exportLeads} />
+          <LeadsTable leads={leads.data?.leads ?? []} />
         )}
       </section>
     </>

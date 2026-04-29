@@ -1,6 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
-import { downloadLeadsCsv, exportLeadsJson } from "../api";
+import { downloadLeadsCsv, exportLeadsJson, listLeads } from "../api";
+import type { ListLeadsParams } from "../api";
 import { queryKeys } from "./queryKeys";
+
+export function useLeads(params: ListLeadsParams = {}) {
+  return useQuery({
+    queryKey: queryKeys.leads(params),
+    queryFn: () => listLeads(params),
+  });
+}
 
 export function useExportLeadsJson() {
   return useQuery({

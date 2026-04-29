@@ -105,3 +105,15 @@ export type EmptyExportResponse = {
 };
 
 export type ExportLeadsResponse = ExportLeadsJsonResponse | EmptyExportResponse;
+
+export type ListLeadsParams = {
+  status?: string;
+  job_id?: string;
+  has_email?: boolean;
+  has_website?: boolean;
+};
+
+export type ListLeadsResponse = {
+  count: number;
+  leads: Lead[];
+};

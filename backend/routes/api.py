@@ -407,6 +407,56 @@ def scrape_leads_emails():
         return jsonify({"error": str(e)}), 500
 
 
+def _parse_bool_query(value):
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"true", "1", "yes"}:
+        return True
+    if normalized in {"false", "0", "no"}:
+        return False
+    raise ValueError("Expected boolean query value: true or false")
+
+
+@api_bp.route("/leads", methods=["GET"])
+@log_function_call
+def list_leads():
+    """Lists all stored leads with optional filters.
+
+    Query Parameters:
+        status (str, optional): Exact lead status, e.g. scraped, failed, skipped.
+        job_id (str, optional): Parent job UUID.
+        has_email (bool, optional): true for leads with email, false without.
+        has_website (bool, optional): true for leads with website, false without.
+
+    Returns:
+        200 JSON with count and leads.
+        400 if boolean filters are invalid.
+        500 on unexpected error.
+    """
+    try:
+        status = request.args.get("status")
+        job_id = request.args.get("job_id")
+        has_email = _parse_bool_query(request.args.get("has_email"))
+        has_website = _parse_bool_query(request.args.get("has_website"))
+
+        with Database() as db:
+            leads = db.list_leads(
+                status=status,
+                job_id=job_id,
+                has_email=has_email,
+                has_website=has_website
+            )
+
+        return jsonify({"count": len(leads), "leads": leads}), 200
+
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logging.error(f"Error listing leads: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @api_bp.route("/leads/export", methods=["GET"])
 @log_function_call
 def export_leads():
