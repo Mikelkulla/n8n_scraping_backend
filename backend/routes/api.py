@@ -204,6 +204,62 @@ def get_progress(job_id):
         logging.error(f"Error fetching progress for job {job_id}: {e}")
         return jsonify({"error": str(e)}), 500
 
+
+@api_bp.route("/summary", methods=["GET"])
+@log_function_call
+def get_summary():
+    """Returns dashboard summary counts for leads and jobs."""
+    try:
+        with Database() as db:
+            summary = db.get_summary()
+
+        return jsonify(summary), 200
+
+    except Exception as e:
+        logging.error(f"Error fetching summary: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/jobs", methods=["GET"])
+@log_function_call
+def list_jobs():
+    """Lists recent job executions with optional filters.
+
+    Query Parameters:
+        status (str, optional): Exact job status.
+        step_id (str, optional): Exact step ID.
+        limit (int, optional): Max rows to return. Defaults to 50, capped at 200.
+
+    Returns:
+        200 JSON with count and jobs.
+        400 for invalid limit values.
+        500 on unexpected error.
+    """
+    try:
+        status = request.args.get("status")
+        step_id = request.args.get("step_id")
+        raw_limit = request.args.get("limit", "50")
+
+        try:
+            limit = int(raw_limit)
+        except ValueError:
+            return jsonify({"error": "limit must be an integer"}), 400
+
+        if limit < 1:
+            return jsonify({"error": "limit must be greater than 0"}), 400
+
+        limit = min(limit, 200)
+
+        with Database() as db:
+            jobs = db.list_job_executions(status=status, step_id=step_id, limit=limit)
+
+        return jsonify({"count": len(jobs), "jobs": jobs}), 200
+
+    except Exception as e:
+        logging.error(f"Error listing jobs: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @api_bp.route("/stop/<job_id>", methods=["POST"])
 @log_function_call
 def stop_scrape(job_id):
@@ -454,6 +510,58 @@ def list_leads():
         return jsonify({"error": str(e)}), 400
     except Exception as e:
         logging.error(f"Error listing leads: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/leads/<int:lead_id>", methods=["PATCH"])
+@log_function_call
+def patch_lead(lead_id):
+    """Updates manually editable lead fields.
+
+    Request JSON Body:
+        website (str, optional)
+        emails (str, optional)
+        status (str, optional)
+
+    Returns:
+        200 JSON with updated lead.
+        400 if no editable fields are provided.
+        404 if the lead does not exist.
+    """
+    try:
+        data = request.get_json() or {}
+        allowed_fields = {"website", "emails", "status"}
+        update_data = {key: data[key] for key in allowed_fields if key in data}
+
+        if not update_data:
+            return jsonify({"error": "Provide at least one editable field: website, emails, status"}), 400
+
+        if "website" in update_data and update_data["website"]:
+            validated_url, url_error = validate_url(update_data["website"])
+            if url_error:
+                return jsonify({"error": url_error}), 400
+            update_data["website"] = validated_url
+
+        if "emails" in update_data and isinstance(update_data["emails"], list):
+            update_data["emails"] = ",".join(validate_emails(update_data["emails"]))
+        elif "emails" in update_data and isinstance(update_data["emails"], str):
+            raw_emails = [
+                email.strip()
+                for email in update_data["emails"].split(",")
+                if email.strip()
+            ]
+            update_data["emails"] = ",".join(validate_emails(raw_emails))
+
+        with Database() as db:
+            lead = db.update_lead_by_id(lead_id=lead_id, **update_data)
+
+        if not lead:
+            return jsonify({"error": f"Lead {lead_id} not found"}), 404
+
+        return jsonify({"lead": lead}), 200
+
+    except Exception as e:
+        logging.error(f"Error updating lead {lead_id}: {e}")
         return jsonify({"error": str(e)}), 500
 
 

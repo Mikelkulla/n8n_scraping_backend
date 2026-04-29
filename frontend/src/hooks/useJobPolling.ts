@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { getJobProgress, stopJob } from "../api";
-import type { JobProgressResponse } from "../api";
+import { getJobProgress, listJobs, stopJob } from "../api";
+import type { JobProgressResponse, ListJobsParams } from "../api";
 import { queryKeys } from "./queryKeys";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "stopped"]);
@@ -21,6 +21,14 @@ export function useJobPolling(jobId?: string) {
   });
 }
 
+export function useJobs(params: ListJobsParams = {}) {
+  return useQuery({
+    queryKey: queryKeys.jobs(params),
+    queryFn: () => listJobs(params),
+    refetchInterval: 10_000,
+  });
+}
+
 export function useStopJob() {
   const queryClient = useQueryClient();
 
@@ -29,6 +37,9 @@ export function useStopJob() {
     onSuccess: (_, jobId) => {
       void queryClient.invalidateQueries({
         queryKey: queryKeys.jobProgress(jobId),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["jobs"],
       });
     },
   });

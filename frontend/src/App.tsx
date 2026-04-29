@@ -1,32 +1,41 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
   Building2,
   CheckCircle2,
+  ClipboardList,
+  Copy,
   Download,
+  ExternalLink,
   Globe2,
   Loader2,
   Mail,
+  Phone,
   Play,
+  RotateCw,
   Search,
   Settings,
   Square,
   Table2,
 } from "lucide-react";
-import { ApiError, type Lead } from "./api";
+import { ApiError, type JobExecution, type JobStatus, type JobStepId, type Lead } from "./api";
 import {
   useBackendHealth,
   useGoogleMapsScrape,
   useJobPolling,
+  useJobs,
   useLeads,
   useLeadEmailEnrichment,
   useStopJob,
+  useSummary,
+  useUpdateLead,
   useWebsiteEmailScrape,
 } from "./hooks";
 import { downloadExportedLeads } from "./hooks";
 
-type PageId = "dashboard" | "discover" | "website" | "enrich" | "leads" | "settings";
+type PageId = "dashboard" | "discover" | "website" | "enrich" | "leads" | "jobs" | "settings";
 
 const pages: Array<{ id: PageId; label: string; icon: typeof Activity }> = [
   { id: "dashboard", label: "Dashboard", icon: Activity },
@@ -34,6 +43,7 @@ const pages: Array<{ id: PageId; label: string; icon: typeof Activity }> = [
   { id: "website", label: "Website Emails", icon: Globe2 },
   { id: "enrich", label: "Enrich Leads", icon: Mail },
   { id: "leads", label: "Leads", icon: Table2 },
+  { id: "jobs", label: "Jobs", icon: ClipboardList },
   { id: "settings", label: "Settings", icon: Settings },
 ];
 
@@ -96,7 +106,52 @@ function EmptyState({ title, body }: { title: string; body: string }) {
   );
 }
 
-function LeadsTable({ leads }: { leads: Lead[] }) {
+function copyToClipboard(text: string) {
+  if (!text) return;
+  void navigator.clipboard.writeText(text);
+}
+
+function formatLeadAsText(lead: Lead) {
+  return [
+    lead.name,
+    lead.address || lead.location,
+    lead.phone ? `Phone: ${lead.phone}` : undefined,
+    lead.website ? `Website: ${lead.website}` : undefined,
+    lead.emails ? `Email: ${lead.emails}` : undefined,
+  ].filter(Boolean).join("\n");
+}
+
+function EmailListCell({ emails }: { emails?: string | null }) {
+  const items = (emails ?? "")
+    .split(",")
+    .map((email) => email.trim())
+    .filter(Boolean);
+
+  if (!items.length) return <>-</>;
+
+  return (
+    <>
+      {items.map((email, index) => (
+        <span className="email-token" key={`${email}-${index}`}>
+          {email}
+          {index < items.length - 1 ? "," : ""}
+        </span>
+      ))}
+    </>
+  );
+}
+
+function LeadsTable({
+  leads,
+  selectedLeadId,
+  onSelectLead,
+  showActions = false,
+}: {
+  leads: Lead[];
+  selectedLeadId?: number;
+  onSelectLead?: (lead: Lead) => void;
+  showActions?: boolean;
+}) {
   if (!leads.length) {
     return (
       <EmptyState
@@ -108,7 +163,7 @@ function LeadsTable({ leads }: { leads: Lead[] }) {
 
   return (
     <div className="table-wrap">
-      <table>
+      <table className={showActions ? "lead-table" : undefined}>
         <thead>
           <tr>
             <th>Name</th>
@@ -117,15 +172,23 @@ function LeadsTable({ leads }: { leads: Lead[] }) {
             <th>Website</th>
             <th>Emails</th>
             <th>Status</th>
+            {showActions && <th>Actions</th>}
           </tr>
         </thead>
         <tbody>
           {leads.map((lead, index) => (
-            <tr key={`${lead.place_id ?? lead.lead_id ?? index}-${index}`}>
+            <tr
+              key={`${lead.place_id ?? lead.lead_id ?? index}-${index}`}
+              className={[
+                selectedLeadId === lead.lead_id ? "selected-row" : "",
+                onSelectLead ? "clickable-row" : "",
+              ].filter(Boolean).join(" ")}
+              onClick={() => onSelectLead?.(lead)}
+            >
               <td>{lead.name || "Untitled"}</td>
               <td>{lead.location || lead.address || "-"}</td>
-              <td>{lead.phone || "-"}</td>
-              <td>
+              <td className="phone-cell">{lead.phone || "-"}</td>
+              <td className="url-cell">
                 {lead.website ? (
                   <a href={lead.website} target="_blank" rel="noreferrer">
                     {lead.website}
@@ -134,8 +197,59 @@ function LeadsTable({ leads }: { leads: Lead[] }) {
                   "-"
                 )}
               </td>
-              <td>{lead.emails || "-"}</td>
+              <td className="email-cell"><EmailListCell emails={lead.emails} /></td>
               <td>{lead.status ? <StatusBadge status={lead.status} /> : "-"}</td>
+              {showActions && (
+                <td className="actions-cell">
+                  <button
+                    className="icon-button"
+                    type="button"
+                    disabled={!lead.website}
+                    title={lead.website ? "Open website" : "No website"}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (lead.website) window.open(lead.website, "_blank", "noopener,noreferrer");
+                    }}
+                  >
+                    <ExternalLink size={15} />
+                  </button>
+                  <button
+                    className="icon-button"
+                    type="button"
+                    disabled={!lead.emails}
+                    title={lead.emails ? "Copy email" : "No email"}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      copyToClipboard(lead.emails ?? "");
+                    }}
+                  >
+                    <Mail size={15} />
+                  </button>
+                  <button
+                    className="icon-button"
+                    type="button"
+                    disabled={!lead.phone}
+                    title={lead.phone ? "Copy phone" : "No phone"}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      copyToClipboard(lead.phone ?? "");
+                    }}
+                  >
+                    <Phone size={15} />
+                  </button>
+                  <button
+                    className="icon-button"
+                    type="button"
+                    title="Copy lead"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      copyToClipboard(formatLeadAsText(lead));
+                    }}
+                  >
+                    <Copy size={15} />
+                  </button>
+                </td>
+              )}
             </tr>
           ))}
         </tbody>
@@ -144,8 +258,106 @@ function LeadsTable({ leads }: { leads: Lead[] }) {
   );
 }
 
+function JobsTable({
+  jobs,
+  selectedJobId,
+  onSelectJob,
+  onStopJob,
+  stoppingJobId,
+}: {
+  jobs: JobExecution[];
+  selectedJobId?: string;
+  onSelectJob?: (job: JobExecution) => void;
+  onStopJob?: (jobId: string) => void;
+  stoppingJobId?: string;
+}) {
+  if (!jobs.length) {
+    return <EmptyState title="No jobs found" body="Run a scrape or enrichment workflow to create job history." />;
+  }
+
+  const showActions = Boolean(onSelectJob || onStopJob);
+
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Job ID</th>
+            <th>Step</th>
+            <th>Input</th>
+            <th>Status</th>
+            <th>Progress</th>
+            <th>Updated</th>
+            {showActions && <th>Actions</th>}
+          </tr>
+        </thead>
+        <tbody>
+          {jobs.map((job) => (
+            <tr
+              key={`${job.execution_id}-${job.job_id}`}
+              className={[
+                selectedJobId === job.job_id ? "selected-row" : "",
+                onSelectJob ? "clickable-row" : "",
+              ].filter(Boolean).join(" ")}
+              onClick={() => onSelectJob?.(job)}
+            >
+              <td className="mono">{job.job_id}</td>
+              <td>{job.step_id}</td>
+              <td>{job.input}</td>
+              <td><StatusBadge status={job.status} /></td>
+              <td>{job.current_row ?? 0} / {job.total_rows ?? 0}</td>
+              <td>{job.updated_at}</td>
+              {showActions && (
+                <td className="actions-cell">
+                  {onSelectJob && (
+                    <button className="text-button" type="button" onClick={() => onSelectJob(job)}>
+                      Details
+                    </button>
+                  )}
+                  {onStopJob && job.status === "running" && (
+                    <button
+                      className="text-button danger-text"
+                      type="button"
+                      disabled={stoppingJobId === job.job_id}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onStopJob(job.job_id);
+                      }}
+                    >
+                      {stoppingJobId === job.job_id ? "Stopping" : "Stop"}
+                    </button>
+                  )}
+                </td>
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function MetricCard({
+  label,
+  value,
+  tone = "neutral",
+}: {
+  label: string;
+  value: number;
+  tone?: "neutral" | "good" | "warning" | "bad";
+}) {
+  return (
+    <div className={`metric-card metric-${tone}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
 function DashboardPage() {
   const health = useBackendHealth();
+  const summary = useSummary();
+  const jobs = useJobs({ limit: 8 });
 
   return (
     <>
@@ -181,6 +393,43 @@ function DashboardPage() {
             <li>Review and export contact-ready leads.</li>
           </ol>
         </div>
+      </section>
+      <section className="panel">
+        <div className="section-head">
+          <div>
+            <h2>Pipeline summary</h2>
+            <p>Lead and job counts from the local database</p>
+          </div>
+        </div>
+        {summary.isLoading ? (
+          <div className="muted">Loading summary...</div>
+        ) : summary.isError ? (
+          <ErrorAlert error={summary.error} />
+        ) : summary.data ? (
+          <div className="metrics-grid">
+            <MetricCard label="Total leads" value={summary.data.leads.total} />
+            <MetricCard label="With websites" value={summary.data.leads.with_website} />
+            <MetricCard label="With emails" value={summary.data.leads.with_email} tone="good" />
+            <MetricCard label="Pending enrichment" value={summary.data.leads.pending_enrichment} tone="warning" />
+            <MetricCard label="Failed leads" value={summary.data.leads.failed} tone="bad" />
+            <MetricCard label="Running jobs" value={summary.data.jobs.running} tone="warning" />
+          </div>
+        ) : null}
+      </section>
+      <section className="panel">
+        <div className="section-head">
+          <div>
+            <h2>Recent jobs</h2>
+            <p>{jobs.data?.count ?? 0} latest executions</p>
+          </div>
+        </div>
+        {jobs.isLoading ? (
+          <div className="muted">Loading jobs...</div>
+        ) : jobs.isError ? (
+          <ErrorAlert error={jobs.error} />
+        ) : (
+          <JobsTable jobs={jobs.data?.jobs ?? []} />
+        )}
       </section>
     </>
   );
@@ -410,6 +659,146 @@ function JobProgressPanel({ jobId }: { jobId?: string }) {
   );
 }
 
+function JobDetailPanel({ jobId }: { jobId?: string }) {
+  const progress = useJobPolling(jobId);
+  const percent = useMemo(() => {
+    const current = progress.data?.current_row ?? 0;
+    const total = progress.data?.total_rows ?? 0;
+    return total > 0 ? Math.min(100, Math.round((current / total) * 100)) : 0;
+  }, [progress.data]);
+
+  if (!jobId) {
+    return (
+      <section className="panel">
+        <EmptyState title="No job selected" body="Select a job from the table to inspect its current progress." />
+      </section>
+    );
+  }
+
+  return (
+    <section className="panel">
+      <div className="section-head">
+        <div>
+          <h2>Job details</h2>
+          <p className="mono">{jobId}</p>
+        </div>
+        {progress.data && <StatusBadge status={progress.data.status} />}
+      </div>
+      {progress.isLoading ? (
+        <div className="muted">Loading job details...</div>
+      ) : progress.isError ? (
+        <ErrorAlert error={progress.error} />
+      ) : progress.data ? (
+        <div className="detail-grid">
+          <div>
+            <span className="label">Step</span>
+            <strong>{progress.data.step_id}</strong>
+          </div>
+          <div>
+            <span className="label">Input</span>
+            <strong>{progress.data.input}</strong>
+          </div>
+          <div>
+            <span className="label">Max pages</span>
+            <strong>{progress.data.max_pages ?? "-"}</strong>
+          </div>
+          <div>
+            <span className="label">Browser</span>
+            <strong>{progress.data.headless ? "Headless" : "Visible"}</strong>
+          </div>
+          <div className="detail-wide">
+            <span className="label">Progress</span>
+            <div className="progress">
+              <span style={{ width: `${percent}%` }} />
+            </div>
+            <div className="progress-meta">
+              <span>{progress.data.current_row ?? 0} / {progress.data.total_rows ?? 0}</span>
+              <span>{percent}%</span>
+            </div>
+          </div>
+          {progress.data.error_message && (
+            <div className="detail-wide alert alert-error">{progress.data.error_message}</div>
+          )}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function JobsPage() {
+  const [status, setStatus] = useState("");
+  const [stepId, setStepId] = useState("");
+  const [limit, setLimit] = useState(50);
+  const [selectedJobId, setSelectedJobId] = useState<string>();
+  const jobs = useJobs({
+    status: status === "" ? undefined : status as JobStatus,
+    step_id: stepId === "" ? undefined : stepId as JobStepId,
+    limit,
+  });
+  const stop = useStopJob();
+
+  return (
+    <>
+      <PageHeader
+        title="Jobs"
+        description="Browse job history, filter executions, inspect progress, and stop running jobs."
+      />
+      <section className="panel job-filters">
+        <Field label="Status">
+          <select value={status} onChange={(event) => setStatus(event.target.value)}>
+            <option value="">Any status</option>
+            <option value="running">Running</option>
+            <option value="completed">Completed</option>
+            <option value="failed">Failed</option>
+            <option value="stopped">Stopped</option>
+          </select>
+        </Field>
+        <Field label="Step">
+          <select value={stepId} onChange={(event) => setStepId(event.target.value)}>
+            <option value="">Any step</option>
+            <option value="email_scrape">Website email scrape</option>
+            <option value="google_maps_scrape">Google Maps scrape</option>
+            <option value="leads_email_scrape">Lead email enrichment</option>
+          </select>
+        </Field>
+        <Field label="Limit">
+          <input
+            type="number"
+            min={1}
+            max={200}
+            value={limit}
+            onChange={(event) => setLimit(Number(event.target.value))}
+          />
+        </Field>
+      </section>
+      <section className="grid jobs-layout">
+        <section className="panel">
+          <div className="section-head">
+            <div>
+              <h2>Job history</h2>
+              <p>{jobs.data?.count ?? 0} matching executions</p>
+            </div>
+          </div>
+          {jobs.isLoading ? (
+            <div className="muted">Loading jobs...</div>
+          ) : jobs.isError ? (
+            <ErrorAlert error={jobs.error} />
+          ) : (
+            <JobsTable
+              jobs={jobs.data?.jobs ?? []}
+              selectedJobId={selectedJobId}
+              onSelectJob={(job) => setSelectedJobId(job.job_id)}
+              onStopJob={(jobId) => stop.mutate(jobId)}
+              stoppingJobId={stop.isPending ? stop.variables : undefined}
+            />
+          )}
+        </section>
+        <JobDetailPanel jobId={selectedJobId} />
+      </section>
+    </>
+  );
+}
+
 function EnrichPage() {
   const enrich = useLeadEmailEnrichment();
   const [jobId, setJobId] = useState<string>();
@@ -477,11 +866,106 @@ function EnrichPage() {
   );
 }
 
+function LeadDetailPanel({
+  lead,
+  onLeadUpdated,
+}: {
+  lead?: Lead;
+  onLeadUpdated?: (lead: Lead) => void;
+}) {
+  const updateLead = useUpdateLead();
+  const [website, setWebsite] = useState("");
+  const [emails, setEmails] = useState("");
+  const [status, setStatus] = useState("");
+
+  useEffect(() => {
+    setWebsite(lead?.website ?? "");
+    setEmails(lead?.emails ?? "");
+    setStatus(lead?.status ?? "");
+  }, [lead]);
+
+  if (!lead) {
+    return (
+      <section className="panel">
+        <EmptyState title="No lead selected" body="Select a row to inspect and edit lead details." />
+      </section>
+    );
+  }
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!lead?.lead_id) return;
+    updateLead.mutate({
+      leadId: lead.lead_id,
+      payload: {
+        website,
+        emails,
+        status,
+      },
+    }, {
+      onSuccess: (response) => onLeadUpdated?.(response.lead),
+    });
+  }
+
+  return (
+    <section className="panel">
+      <div className="section-head">
+        <div>
+          <h2>{lead.name || "Untitled lead"}</h2>
+          <p>{lead.address || lead.location || "No location"}</p>
+        </div>
+        {lead.status && <StatusBadge status={lead.status} />}
+      </div>
+      <div className="detail-grid">
+        <div>
+          <span className="label">Phone</span>
+          <strong>{lead.phone || "-"}</strong>
+        </div>
+        <div>
+          <span className="label">Source job</span>
+          <strong className="mono">{lead.job_id || "-"}</strong>
+        </div>
+        <div>
+          <span className="label">Created</span>
+          <strong>{lead.created_at || "-"}</strong>
+        </div>
+        <div>
+          <span className="label">Updated</span>
+          <strong>{lead.updated_at || "-"}</strong>
+        </div>
+      </div>
+      <form className="edit-form" onSubmit={submit}>
+        <Field label="Website">
+          <input value={website} onChange={(event) => setWebsite(event.target.value)} />
+        </Field>
+        <Field label="Emails">
+          <input value={emails} onChange={(event) => setEmails(event.target.value)} />
+        </Field>
+        <Field label="Status">
+          <select value={status} onChange={(event) => setStatus(event.target.value)}>
+            <option value="">No status</option>
+            <option value="scraped">Scraped</option>
+            <option value="failed">Failed</option>
+            <option value="skipped">Skipped</option>
+            <option value="pending">Pending</option>
+          </select>
+        </Field>
+        <button type="submit" disabled={updateLead.isPending || !lead.lead_id}>
+          {updateLead.isPending ? <Loader2 className="spin" size={17} /> : <CheckCircle2 size={17} />}
+          Save lead
+        </button>
+        <ErrorAlert error={updateLead.error} />
+      </form>
+    </section>
+  );
+}
+
 function LeadsPage() {
   const [status, setStatus] = useState("");
   const [jobId, setJobId] = useState("");
   const [hasEmail, setHasEmail] = useState("");
   const [hasWebsite, setHasWebsite] = useState("");
+  const [selectedLead, setSelectedLead] = useState<Lead>();
   const leads = useLeads({
     status: status || undefined,
     job_id: jobId || undefined,
@@ -526,25 +1010,44 @@ function LeadsPage() {
             <option value="false">No website</option>
           </select>
         </Field>
+        <button
+          className="secondary"
+          type="button"
+          onClick={() => {
+            setStatus("");
+            setHasWebsite("true");
+            setHasEmail("false");
+          }}
+        >
+          Needs enrichment
+        </button>
       </section>
-      <section className="panel">
-        <div className="section-head">
-          <div>
-            <h2>Stored leads</h2>
-            <p>{leads.data?.count ?? 0} matching records</p>
+      <section className="grid leads-layout">
+        <section className="panel">
+          <div className="section-head">
+            <div>
+              <h2>Stored leads</h2>
+              <p>{leads.data?.count ?? 0} matching records</p>
+            </div>
+            <button className="secondary" type="button" onClick={() => void downloadExportedLeads()}>
+              <Download size={17} />
+              Export CSV
+            </button>
           </div>
-          <button className="secondary" type="button" onClick={() => void downloadExportedLeads()}>
-            <Download size={17} />
-            Export CSV
-          </button>
-        </div>
-        {leads.isLoading ? (
-          <div className="muted">Loading leads...</div>
-        ) : leads.isError ? (
-          <ErrorAlert error={leads.error} />
-        ) : (
-          <LeadsTable leads={leads.data?.leads ?? []} />
-        )}
+          {leads.isLoading ? (
+            <div className="muted">Loading leads...</div>
+          ) : leads.isError ? (
+            <ErrorAlert error={leads.error} />
+          ) : (
+            <LeadsTable
+              leads={leads.data?.leads ?? []}
+              selectedLeadId={selectedLead?.lead_id}
+              onSelectLead={setSelectedLead}
+              showActions
+            />
+          )}
+        </section>
+        <LeadDetailPanel lead={selectedLead} onLeadUpdated={setSelectedLead} />
       </section>
     </>
   );
@@ -580,6 +1083,7 @@ function CurrentPage({ page }: { page: PageId }) {
   if (page === "website") return <WebsiteEmailPage />;
   if (page === "enrich") return <EnrichPage />;
   if (page === "leads") return <LeadsPage />;
+  if (page === "jobs") return <JobsPage />;
   if (page === "settings") return <SettingsPage />;
   return <DashboardPage />;
 }
@@ -587,6 +1091,7 @@ function CurrentPage({ page }: { page: PageId }) {
 export function App() {
   const [page, setPage] = useState<PageId>("dashboard");
   const health = useBackendHealth();
+  const queryClient = useQueryClient();
 
   return (
     <div className="app-shell">
@@ -618,7 +1123,17 @@ export function App() {
       <main>
         <div className="topbar">
           <span className="muted">Local Flask backend</span>
-          {health.isSuccess ? <StatusBadge status={health.data.status} /> : <StatusBadge />}
+          <div className="topbar-actions">
+            <button
+              className="secondary"
+              type="button"
+              onClick={() => void queryClient.invalidateQueries()}
+            >
+              <RotateCw size={16} />
+              Refresh
+            </button>
+            {health.isSuccess ? <StatusBadge status={health.data.status} /> : <StatusBadge />}
+          </div>
         </div>
         <CurrentPage page={page} />
       </main>

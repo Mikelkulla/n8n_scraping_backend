@@ -236,6 +236,139 @@ class Database:
             logging.error(f"Failed to fetch execution for job {job_id}: {e}")
             return None
 
+    def list_job_executions(self, status=None, step_id=None, limit=50):
+        """Retrieves recent job executions with optional filters.
+
+        Args:
+            status (str, optional): Exact job status to match.
+            step_id (str, optional): Exact step ID to match.
+            limit (int, optional): Maximum number of jobs to return.
+
+        Returns:
+            list[dict]: Job execution rows ordered by latest update.
+        """
+        try:
+            query = """
+                SELECT
+                    execution_id,
+                    job_id,
+                    step_id,
+                    input,
+                    max_pages,
+                    use_tor,
+                    headless,
+                    status,
+                    current_row,
+                    total_rows,
+                    created_at,
+                    updated_at,
+                    error_message,
+                    stop_call
+                FROM job_executions
+                WHERE 1 = 1
+            """
+            params = []
+
+            if status:
+                query += " AND status = ?"
+                params.append(status)
+
+            if step_id:
+                query += " AND step_id = ?"
+                params.append(step_id)
+
+            query += " ORDER BY updated_at DESC, execution_id DESC LIMIT ?"
+            params.append(limit)
+
+            self.cursor.execute(query, params)
+            rows = self.cursor.fetchall()
+            return [dict(row) for row in rows] if rows else []
+        except sqlite3.Error as e:
+            logging.error(f"Failed to list job executions: {e}")
+            return []
+
+    def get_summary(self):
+        """Computes dashboard summary counts for leads and jobs.
+
+        Returns:
+            dict: Aggregated counts for the lead pipeline and job statuses.
+        """
+        try:
+            lead_counts = {
+                "total": 0,
+                "with_website": 0,
+                "with_email": 0,
+                "pending_enrichment": 0,
+                "scraped": 0,
+                "failed": 0,
+                "skipped": 0,
+            }
+            job_counts = {
+                "total": 0,
+                "running": 0,
+                "completed": 0,
+                "failed": 0,
+                "stopped": 0,
+            }
+
+            self.cursor.execute("""
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN website IS NOT NULL AND TRIM(website) != '' THEN 1 ELSE 0 END) AS with_website,
+                    SUM(CASE WHEN emails IS NOT NULL AND TRIM(emails) != '' THEN 1 ELSE 0 END) AS with_email,
+                    SUM(CASE
+                        WHEN website IS NOT NULL
+                         AND TRIM(website) != ''
+                         AND (status IS NULL OR status != 'scraped')
+                        THEN 1 ELSE 0
+                    END) AS pending_enrichment,
+                    SUM(CASE WHEN status = 'scraped' THEN 1 ELSE 0 END) AS scraped,
+                    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+                    SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END) AS skipped
+                FROM leads
+            """)
+            lead_row = self.cursor.fetchone()
+            if lead_row:
+                lead_counts.update({key: lead_row[key] or 0 for key in lead_counts})
+
+            self.cursor.execute("""
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running,
+                    SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed,
+                    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+                    SUM(CASE WHEN status = 'stopped' THEN 1 ELSE 0 END) AS stopped
+                FROM job_executions
+            """)
+            job_row = self.cursor.fetchone()
+            if job_row:
+                job_counts.update({key: job_row[key] or 0 for key in job_counts})
+
+            return {
+                "leads": lead_counts,
+                "jobs": job_counts,
+            }
+        except sqlite3.Error as e:
+            logging.error(f"Failed to compute summary: {e}")
+            return {
+                "leads": {
+                    "total": 0,
+                    "with_website": 0,
+                    "with_email": 0,
+                    "pending_enrichment": 0,
+                    "scraped": 0,
+                    "failed": 0,
+                    "skipped": 0,
+                },
+                "jobs": {
+                    "total": 0,
+                    "running": 0,
+                    "completed": 0,
+                    "failed": 0,
+                    "stopped": 0,
+                },
+            }
+
     def get_leads(self, status_filter=None):
         """Retrieves lead records from the database, joining with job_executions.
 
@@ -417,6 +550,65 @@ class Database:
                 logging.info(f"Updated lead for place {place_id}")
         except sqlite3.Error as e:
             logging.error(f"Failed to update lead for place {place_id}: {e}")
+            raise
+
+    def update_lead_by_id(self, lead_id, website=None, emails=None, status=None):
+        """Updates editable lead fields by lead_id.
+
+        Args:
+            lead_id (int): The primary key of the lead to update.
+            website (str | None): Replacement website value.
+            emails (str | None): Replacement comma-separated emails value.
+            status (str | None): Replacement lead status.
+
+        Returns:
+            dict | None: The updated lead row, or None if no row was found.
+        """
+        try:
+            set_clauses = []
+            params = []
+
+            if website is not None:
+                set_clauses.append("website = ?")
+                params.append(website)
+            if emails is not None:
+                set_clauses.append("emails = ?")
+                params.append(emails)
+            if status is not None:
+                set_clauses.append("status = ?")
+                params.append(status)
+
+            if not set_clauses:
+                self.cursor.execute("""
+                    SELECT l.*, j.job_id, j.step_id, j.status AS job_status
+                    FROM leads l
+                    JOIN job_executions j ON l.execution_id = j.execution_id
+                    WHERE l.lead_id = ?
+                """, (lead_id,))
+                row = self.cursor.fetchone()
+                return dict(row) if row else None
+
+            set_clauses.append("updated_at = CURRENT_TIMESTAMP")
+            params.append(lead_id)
+
+            self.cursor.execute(
+                f"UPDATE leads SET {', '.join(set_clauses)} WHERE lead_id = ?",
+                params
+            )
+
+            if self.cursor.rowcount == 0:
+                return None
+
+            self.cursor.execute("""
+                SELECT l.*, j.job_id, j.step_id, j.status AS job_status
+                FROM leads l
+                JOIN job_executions j ON l.execution_id = j.execution_id
+                WHERE l.lead_id = ?
+            """, (lead_id,))
+            row = self.cursor.fetchone()
+            return dict(row) if row else None
+        except sqlite3.Error as e:
+            logging.error(f"Failed to update lead {lead_id}: {e}")
             raise
 
     def get_export_leads(self):

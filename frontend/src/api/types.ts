@@ -94,6 +94,53 @@ export type StopJobResponse = {
   status: "stopped";
 };
 
+export type JobExecution = {
+  execution_id: number;
+  job_id: string;
+  step_id: JobStepId;
+  input: string;
+  max_pages: number | null;
+  use_tor: boolean | null;
+  headless: boolean | null;
+  status: JobStatus;
+  current_row: number | null;
+  total_rows: number | null;
+  created_at: string;
+  updated_at: string;
+  error_message: string | null;
+  stop_call: boolean | number;
+};
+
+export type ListJobsParams = {
+  status?: JobStatus;
+  step_id?: JobStepId;
+  limit?: number;
+};
+
+export type ListJobsResponse = {
+  count: number;
+  jobs: JobExecution[];
+};
+
+export type SummaryResponse = {
+  leads: {
+    total: number;
+    with_website: number;
+    with_email: number;
+    pending_enrichment: number;
+    scraped: number;
+    failed: number;
+    skipped: number;
+  };
+  jobs: {
+    total: number;
+    running: number;
+    completed: number;
+    failed: number;
+    stopped: number;
+  };
+};
+
 export type ExportLeadsJsonResponse = {
   count: number;
   leads: Lead[];
@@ -116,4 +163,14 @@ export type ListLeadsParams = {
 export type ListLeadsResponse = {
   count: number;
   leads: Lead[];
+};
+
+export type UpdateLeadRequest = {
+  website?: string;
+  emails?: string | string[];
+  status?: string;
+};
+
+export type UpdateLeadResponse = {
+  lead: Lead;
 };
