@@ -566,6 +566,12 @@ def _parse_optional_bool(value):
 def list_campaigns():
     """Lists campaigns with stage counts."""
     try:
+        if campaign_id:
+            try:
+                campaign_id = int(campaign_id)
+            except ValueError:
+                return jsonify({"error": "campaign_id must be an integer"}), 400
+
         with Database() as db:
             campaigns = db.list_campaigns()
         return jsonify({"count": len(campaigns), "campaigns": campaigns}), 200
@@ -588,7 +594,7 @@ def create_campaign():
         if not isinstance(filters, dict):
             return jsonify({"error": "filters must be an object"}), 400
 
-        for bool_key in ["has_email", "has_website"]:
+        for bool_key in ["has_email", "has_website", "has_phone"]:
             if bool_key in filters:
                 filters[bool_key] = _parse_optional_bool(filters.get(bool_key))
 
@@ -656,8 +662,11 @@ def patch_campaign(campaign_id):
 def list_campaign_leads(campaign_id):
     """Lists campaign lead workflow rows joined to lead data."""
     try:
+        name_search = request.args.get("name")
+        campaign_id = request.args.get("campaign_id")
         has_email = _parse_bool_query(request.args.get("has_email"))
         has_website = _parse_bool_query(request.args.get("has_website"))
+        has_phone = _parse_bool_query(request.args.get("has_phone"))
 
         with Database() as db:
             campaign = db.get_campaign(campaign_id)
@@ -783,7 +792,8 @@ def list_leads():
                 business_type=business_type,
                 search_location=search_location,
                 has_email=has_email,
-                has_website=has_website
+                has_website=has_website,
+                has_phone=has_phone
             )
 
         return jsonify({"count": len(leads), "leads": leads}), 200
@@ -792,6 +802,20 @@ def list_leads():
         return jsonify({"error": str(e)}), 400
     except Exception as e:
         logging.error(f"Error listing leads: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/leads/filter-options", methods=["GET"])
+@log_function_call
+def list_lead_filter_options():
+    """Lists distinct scraped business types and search locations for filter dropdowns."""
+    try:
+        with Database() as db:
+            options = db.list_lead_filter_options()
+
+        return jsonify(options), 200
+    except Exception as e:
+        logging.error(f"Error listing lead filter options: {e}")
         return jsonify({"error": str(e)}), 500
 
 

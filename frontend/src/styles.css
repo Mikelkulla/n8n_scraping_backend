@@ -354,6 +354,7 @@ button.danger {
   display: inline-flex;
   align-items: center;
   width: fit-content;
+  max-width: 100%;
   min-height: 24px;
   border-radius: 999px;
   padding: 0 10px;
@@ -362,6 +363,9 @@ button.danger {
   font-size: 0.78rem;
   font-weight: 800;
   text-transform: uppercase;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .status-ok,
@@ -390,6 +394,7 @@ button.danger {
   display: inline-flex;
   align-items: center;
   width: fit-content;
+  max-width: 100%;
   min-height: 24px;
   border-radius: 999px;
   padding: 0 10px;
@@ -398,6 +403,9 @@ button.danger {
   font-size: 0.78rem;
   font-weight: 800;
   text-transform: uppercase;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .flag-good {
@@ -542,11 +550,13 @@ table {
 .lead-table th:nth-child(7),
 .lead-table td:nth-child(7) {
   width: 8%;
+  overflow: hidden;
 }
 
 .lead-table th:nth-child(8),
 .lead-table td:nth-child(8) {
   width: 8%;
+  overflow: hidden;
 }
 
 .lead-table th:nth-child(9),
@@ -582,6 +592,8 @@ td {
 th {
   color: #49565d;
   font-size: 0.82rem;
+  vertical-align: middle;
+  text-align: center;
 }
 
 td {
@@ -611,10 +623,100 @@ td {
   margin-right: 0.35rem;
 }
 
+.header-filter-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+}
+
+.header-filter-cell > span {
+  flex: 0 0 auto;
+  font-weight: 800;
+}
+
+.header-filter-cell input,
+.header-filter-cell select {
+  min-height: 28px;
+  border-radius: 6px;
+  padding: 3px 6px;
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+
+.header-search-input {
+  flex: 1 1 auto;
+  width: auto;
+  max-width: 118px;
+  min-width: 0;
+  border-color: #cbd4cf;
+  background: #fff;
+  color: #172026;
+}
+
+.header-filter-select,
+.header-title-select {
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.header-filter-select.compact {
+  flex: 1 1 0;
+  max-width: 86px;
+  min-height: 28px;
+  border-color: #cbd4cf;
+  background: #fff;
+  padding: 2px 18px 2px 4px;
+  color: #172026;
+  font-weight: 700;
+}
+
+.header-title-select {
+  min-height: 28px;
+  border: 1px solid #cbd4cf;
+  border-radius: 6px;
+  background: #fff;
+  color: #49565d;
+  padding: 2px 18px 2px 6px;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.header-search-input:hover,
+.header-filter-select.compact:hover,
+.header-title-select:hover,
+.header-search-input:focus,
+.header-filter-select.compact:focus,
+.header-title-select:focus {
+  background: #eaf1ef;
+}
+
+.header-filter-stack {
+  display: grid;
+  gap: 6px;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.header-filter-inline {
+  flex-wrap: nowrap;
+}
+
+.header-filter-location {
+  width: 100%;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .badge-select {
   width: auto;
   min-height: 24px;
-  max-width: 118px;
+  max-width: 100%;
   border: 0;
   border-radius: 999px;
   padding: 2px 18px 2px 7px;
@@ -624,6 +726,7 @@ td {
   cursor: pointer;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
   text-transform: none;
 }
 
@@ -735,7 +838,7 @@ td {
   margin-bottom: 14px;
 }
 
-.stage-counts span {
+.stage-count-button {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -746,11 +849,19 @@ td {
   padding: 0 10px;
   color: #49565d;
   font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.stage-count-button:hover,
+.stage-count-button.active {
+  border-color: #b9d3cd;
+  background: #eaf1ef;
+  color: #123f45;
 }
 
 .campaign-toolbar {
   display: grid;
-  grid-template-columns: 220px minmax(260px, 1fr);
+  grid-template-columns: minmax(260px, 1fr);
   gap: 12px;
   margin-bottom: 14px;
 }
@@ -831,10 +942,14 @@ td {
 
 .filters {
   display: grid;
-  grid-template-columns: 140px minmax(220px, 1fr) 130px 130px 140px 140px max-content;
+  grid-template-columns: 140px minmax(110px, 0.5fr) 130px 130px 130px 140px 140px max-content;
   gap: 14px;
   margin-bottom: 16px;
   align-items: end;
+}
+
+.filters button {
+  align-self: end;
 }
 
 .job-filters {

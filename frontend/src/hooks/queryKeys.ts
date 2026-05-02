@@ -4,6 +4,7 @@ export const queryKeys = {
   jobs: (params: Record<string, unknown>) => ["jobs", params] as const,
   jobProgress: (jobId: string) => ["job-progress", jobId] as const,
   leads: (params: Record<string, unknown>) => ["leads", params] as const,
+  leadFilterOptions: ["lead-filter-options"] as const,
   leadEmails: (leadId: number) => ["lead-emails", leadId] as const,
   campaigns: ["campaigns"] as const,
   campaign: (campaignId: number) => ["campaign", campaignId] as const,

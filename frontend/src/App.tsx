@@ -37,6 +37,7 @@ import {
   useGoogleMapsScrape,
   useJobPolling,
   useJobs,
+  useLeadFilterOptions,
   useLeadEmails,
   useLeads,
   useLeadEmailEnrichment,
@@ -70,6 +71,42 @@ const emailCategories = ["unknown", "booking", "info", "sales", "support", "acco
 const campaignStatuses = ["draft", "active", "paused", "completed", "archived"];
 const campaignStages = ["review", "ready_for_email", "drafted", "approved", "contacted", "replied", "closed", "skipped", "do_not_contact"];
 const campaignPriorities = ["", "low", "normal", "high"];
+
+function normalizeCountOption(option: unknown) {
+  if (typeof option === "string") {
+    const value = option.trim();
+    return value ? { value, count: 0 } : undefined;
+  }
+
+  if (typeof option === "object" && option !== null && "value" in option) {
+    const value = String(option.value ?? "").trim();
+    const count = Number("count" in option ? option.count : 0);
+    return value ? { value, count: Number.isFinite(count) ? count : 0 } : undefined;
+  }
+
+  return undefined;
+}
+
+function optionLabel(option: { value: string; count: number }) {
+  return option.count > 0 ? `${option.value} (${option.count})` : option.value;
+}
+
+function parseLeadLocation(value?: string | null) {
+  if (!value) return {};
+  if (!value.includes(":")) {
+    const searchLocation = value.trim();
+    return searchLocation ? { searchLocation } : {};
+  }
+
+  const [rawBusinessType, rawSearchLocation] = value.split(":", 2);
+  const businessType = rawBusinessType.trim();
+  const searchLocation = rawSearchLocation.trim();
+
+  return {
+    businessType: businessType || undefined,
+    searchLocation: searchLocation || undefined,
+  };
+}
 
 function errorMessage(error: unknown) {
   if (error instanceof ApiError) return error.message;
@@ -273,9 +310,24 @@ function CampaignMembershipCell({ lead }: { lead: Lead }) {
   );
 }
 
+type LeadHeaderFilters = {
+  name: string;
+  businessType: string;
+  searchLocation: string;
+  campaign: string;
+  businessTypeOptions: Array<{ value: string; count: number }>;
+  searchLocationOptions: Array<{ value: string; count: number }>;
+  campaignOptions: Array<{ value: string; count: number }>;
+  onNameChange: (value: string) => void;
+  onBusinessTypeChange: (value: string) => void;
+  onSearchLocationChange: (value: string) => void;
+  onCampaignChange: (value: string) => void;
+};
+
 function LeadsTable({
   leads,
   selectedLeadId,
+  headerFilters,
   onSelectLead,
   renderExpandedLead,
   onUpdateLeadFlag,
@@ -285,6 +337,7 @@ function LeadsTable({
 }: {
   leads: Lead[];
   selectedLeadId?: number;
+  headerFilters?: LeadHeaderFilters;
   onSelectLead?: (lead: Lead) => void;
   renderExpandedLead?: (lead: Lead) => ReactNode;
   onUpdateLeadFlag?: (lead: Lead, value: string) => void;
@@ -292,7 +345,7 @@ function LeadsTable({
   updatingLeadId?: number;
   showActions?: boolean;
 }) {
-  if (!leads.length) {
+  if (!leads.length && !headerFilters) {
     return (
       <EmptyState
         title="No leads to show"
@@ -306,18 +359,86 @@ function LeadsTable({
       <table className={showActions ? "lead-table" : undefined}>
         <thead>
           <tr>
-            <th>Name</th>
-            <th>Location</th>
+            <th>
+              <div className="header-filter-cell header-filter-inline">
+                <span>Name</span>
+                {headerFilters && (
+                  <input
+                    className="header-search-input"
+                    value={headerFilters.name}
+                    onChange={(event) => headerFilters.onNameChange(event.target.value)}
+                    placeholder="Search name"
+                  />
+                )}
+              </div>
+            </th>
+            <th>
+              <div className="header-filter-cell">
+                {!headerFilters && <span>Location</span>}
+                {headerFilters && (
+                  <div className="header-filter-inline header-filter-location">
+                    <select
+                      className="header-filter-select compact"
+                      value={headerFilters.businessType}
+                      title={headerFilters.businessType || "Any business type"}
+                      onChange={(event) => headerFilters.onBusinessTypeChange(event.target.value)}
+                    >
+                      <option value="">Type</option>
+                      {headerFilters.businessTypeOptions.map((item) => (
+                        <option value={item.value} key={item.value}>{optionLabel(item)}</option>
+                      ))}
+                    </select>
+                    <select
+                      className="header-filter-select compact"
+                      value={headerFilters.searchLocation}
+                      title={headerFilters.searchLocation || "Any location"}
+                      onChange={(event) => headerFilters.onSearchLocationChange(event.target.value)}
+                    >
+                      <option value="">Location</option>
+                      {headerFilters.searchLocationOptions.map((item) => (
+                        <option value={item.value} key={item.value}>{optionLabel(item)}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+            </th>
             <th>Phone</th>
             <th>Website</th>
             <th>Emails</th>
-            <th>Campaign</th>
+            <th>
+              {headerFilters ? (
+                <select
+                  className="header-title-select"
+                  value={headerFilters.campaign}
+                  title={headerFilters.campaign || "Campaign"}
+                  onChange={(event) => headerFilters.onCampaignChange(event.target.value)}
+                >
+                  <option value="">Campaign</option>
+                  {headerFilters.campaignOptions.map((item) => (
+                    <option value={item.value} key={item.value}>{optionLabel(item)}</option>
+                  ))}
+                </select>
+              ) : (
+                "Campaign"
+              )}
+            </th>
             <th>Flag</th>
             <th>Lead status</th>
             {showActions && <th>Actions</th>}
           </tr>
         </thead>
         <tbody>
+          {!leads.length && (
+            <tr>
+              <td colSpan={showActions ? 9 : 8}>
+                <EmptyState
+                  title="No leads match these filters"
+                  body="Adjust the table header filters or clear one of the sidebar filters."
+                />
+              </td>
+            </tr>
+          )}
           {leads.map((lead, index) => {
             const rowKey = `${lead.place_id ?? lead.lead_id ?? index}-${index}`;
             const isSelected = selectedLeadId === lead.lead_id;
@@ -1343,6 +1464,11 @@ function LeadsPage() {
   const [jobId, setJobId] = useState("");
   const [hasEmail, setHasEmail] = useState("");
   const [hasWebsite, setHasWebsite] = useState("");
+  const [hasPhone, setHasPhone] = useState("");
+  const [nameColumnFilter, setNameColumnFilter] = useState("");
+  const [businessTypeColumnFilter, setBusinessTypeColumnFilter] = useState("");
+  const [searchLocationColumnFilter, setSearchLocationColumnFilter] = useState("");
+  const [campaignColumnFilter, setCampaignColumnFilter] = useState("");
   const [leadFlagFilter, setLeadFlagFilter] = useState("");
   const [leadStatusFilter, setLeadStatusFilter] = useState("");
   const [selectedLead, setSelectedLead] = useState<Lead>();
@@ -1354,10 +1480,69 @@ function LeadsPage() {
     job_id: jobId || undefined,
     has_email: hasEmail === "" ? undefined : hasEmail === "true",
     has_website: hasWebsite === "" ? undefined : hasWebsite === "true",
+    has_phone: hasPhone === "" ? undefined : hasPhone === "true",
     lead_flag: leadFlagFilter || undefined,
     lead_status: leadStatusFilter || undefined,
   });
-  const allLeads = leads.data?.leads ?? [];
+  const serverLeads = leads.data?.leads ?? [];
+  const businessTypeOptions = useMemo(() => {
+    const counts = new Map<string, number>();
+    serverLeads.forEach((lead) => {
+      const parsed = parseLeadLocation(lead.location);
+      if (!parsed.businessType) return;
+      if (searchLocationColumnFilter && parsed.searchLocation !== searchLocationColumnFilter) return;
+      counts.set(parsed.businessType, (counts.get(parsed.businessType) ?? 0) + 1);
+    });
+    return [...counts.entries()]
+      .map(([value, count]) => ({ value, count }))
+      .sort((a, b) => a.value.localeCompare(b.value));
+  }, [searchLocationColumnFilter, serverLeads]);
+  const searchLocationOptions = useMemo(() => {
+    const counts = new Map<string, number>();
+    serverLeads.forEach((lead) => {
+      const parsed = parseLeadLocation(lead.location);
+      if (!parsed.searchLocation) return;
+      if (businessTypeColumnFilter && parsed.businessType !== businessTypeColumnFilter) return;
+      counts.set(parsed.searchLocation, (counts.get(parsed.searchLocation) ?? 0) + 1);
+    });
+    return [...counts.entries()]
+      .map(([value, count]) => ({ value, count }))
+      .sort((a, b) => a.value.localeCompare(b.value));
+  }, [businessTypeColumnFilter, serverLeads]);
+  const campaignOptions = useMemo(() => {
+    const counts = new Map<string, number>();
+    serverLeads.forEach((lead) => {
+      (lead.campaign_names ?? []).forEach((campaignName) => {
+        counts.set(campaignName, (counts.get(campaignName) ?? 0) + 1);
+      });
+    });
+    return [...counts.entries()]
+      .map(([value, count]) => ({ value, count }))
+      .sort((a, b) => a.value.localeCompare(b.value));
+  }, [serverLeads]);
+  const allLeads = useMemo(() => {
+    const normalizedName = nameColumnFilter.trim().toLowerCase();
+    return serverLeads.filter((lead) => {
+      const parsed = parseLeadLocation(lead.location);
+      if (normalizedName && !(lead.name ?? "").toLowerCase().includes(normalizedName)) return false;
+      if (businessTypeColumnFilter && parsed.businessType !== businessTypeColumnFilter) return false;
+      if (searchLocationColumnFilter && parsed.searchLocation !== searchLocationColumnFilter) return false;
+      if (campaignColumnFilter && !(lead.campaign_names ?? []).includes(campaignColumnFilter)) return false;
+      return true;
+    });
+  }, [businessTypeColumnFilter, campaignColumnFilter, nameColumnFilter, searchLocationColumnFilter, serverLeads]);
+
+  useEffect(() => {
+    if (!businessTypeColumnFilter) return;
+    const isValid = businessTypeOptions.some((item) => item.value === businessTypeColumnFilter);
+    if (!isValid) setBusinessTypeColumnFilter("");
+  }, [businessTypeColumnFilter, businessTypeOptions]);
+
+  useEffect(() => {
+    if (!searchLocationColumnFilter) return;
+    const isValid = searchLocationOptions.some((item) => item.value === searchLocationColumnFilter);
+    if (!isValid) setSearchLocationColumnFilter("");
+  }, [searchLocationColumnFilter, searchLocationOptions]);
   const totalPages = pageSize === "all" ? 1 : Math.max(1, Math.ceil(allLeads.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const visibleLeads = pageSize === "all"
@@ -1366,7 +1551,7 @@ function LeadsPage() {
 
   useEffect(() => {
     setPage(1);
-  }, [status, jobId, hasEmail, hasWebsite, leadFlagFilter, leadStatusFilter, pageSize]);
+  }, [nameColumnFilter, status, jobId, hasEmail, hasWebsite, hasPhone, businessTypeColumnFilter, searchLocationColumnFilter, campaignColumnFilter, leadFlagFilter, leadStatusFilter, pageSize]);
 
   return (
     <>
@@ -1405,6 +1590,13 @@ function LeadsPage() {
             <option value="false">No website</option>
           </select>
         </Field>
+        <Field label="Phone">
+          <select value={hasPhone} onChange={(event) => setHasPhone(event.target.value)}>
+            <option value="">Any</option>
+            <option value="true">Has phone</option>
+            <option value="false">No phone</option>
+          </select>
+        </Field>
         <Field label="Flag">
           <select value={leadFlagFilter} onChange={(event) => setLeadFlagFilter(event.target.value)}>
             <option value="">Any flag</option>
@@ -1428,6 +1620,7 @@ function LeadsPage() {
             setStatus("");
             setHasWebsite("true");
             setHasEmail("false");
+            setHasPhone("");
           }}
         >
           Needs enrichment
@@ -1438,7 +1631,7 @@ function LeadsPage() {
           <div className="section-head">
             <div>
               <h2>Stored leads</h2>
-              <p>{leads.data?.count ?? 0} matching records</p>
+              <p>{allLeads.length} matching records</p>
             </div>
             <button className="secondary" type="button" onClick={() => void downloadExportedLeads()}>
               <Download size={17} />
@@ -1492,6 +1685,19 @@ function LeadsPage() {
             <LeadsTable
               leads={visibleLeads}
               selectedLeadId={selectedLead?.lead_id}
+              headerFilters={{
+                name: nameColumnFilter,
+                businessType: businessTypeColumnFilter,
+                searchLocation: searchLocationColumnFilter,
+                campaign: campaignColumnFilter,
+                businessTypeOptions,
+                searchLocationOptions,
+                campaignOptions,
+                onNameChange: setNameColumnFilter,
+                onBusinessTypeChange: setBusinessTypeColumnFilter,
+                onSearchLocationChange: setSearchLocationColumnFilter,
+                onCampaignChange: setCampaignColumnFilter,
+              }}
               onSelectLead={(lead) => {
                 setSelectedLead((current) => current?.lead_id === lead.lead_id ? undefined : lead);
               }}
@@ -1525,13 +1731,33 @@ function LeadsPage() {
   );
 }
 
-function CampaignStageCounts({ campaign }: { campaign: Campaign }) {
+function CampaignStageCounts({
+  campaign,
+  activeStage,
+  onStageChange,
+}: {
+  campaign: Campaign;
+  activeStage: string;
+  onStageChange: (stage: string) => void;
+}) {
   return (
     <div className="stage-counts">
-      {campaignStages.slice(0, 7).map((stage) => (
-        <span key={stage}>
+      <button
+        type="button"
+        className={`stage-count-button ${activeStage === "" ? "active" : ""}`}
+        onClick={() => onStageChange("")}
+      >
+        All <strong>{campaign.total_leads}</strong>
+      </button>
+      {campaignStages.map((stage) => (
+        <button
+          type="button"
+          className={`stage-count-button ${activeStage === stage ? "active" : ""}`}
+          key={stage}
+          onClick={() => onStageChange(stage)}
+        >
           {stage.replace("_", " ")} <strong>{Number(campaign[stage as keyof Campaign] ?? 0)}</strong>
-        </span>
+        </button>
       ))}
     </div>
   );
@@ -1748,21 +1974,121 @@ function CampaignsPage() {
   const [statusFilter, setStatusFilter] = useState("scraped");
   const [hasEmail, setHasEmail] = useState("true");
   const [hasWebsite, setHasWebsite] = useState("");
+  const [hasPhone, setHasPhone] = useState("");
   const [leadFlagFilter, setLeadFlagFilter] = useState("");
   const [leadStatusFilter, setLeadStatusFilter] = useState("");
   const [notes, setNotes] = useState("");
   const [stageFilter, setStageFilter] = useState("");
   const [campaignSearch, setCampaignSearch] = useState("");
+  const leadFilterOptions = useLeadFilterOptions();
+  const allLeadOptions = useLeads({});
   const campaignFilters = useMemo(() => ({
     status: statusFilter || undefined,
     has_email: hasEmail === "" ? undefined : hasEmail === "true",
     has_website: hasWebsite === "" ? undefined : hasWebsite === "true",
+    has_phone: hasPhone === "" ? undefined : hasPhone === "true",
     lead_flag: leadFlagFilter || undefined,
     lead_status: leadStatusFilter || undefined,
     business_type: businessType || undefined,
     search_location: searchLocation || undefined,
-  }), [businessType, hasEmail, hasWebsite, leadFlagFilter, leadStatusFilter, searchLocation, statusFilter]);
+  }), [businessType, hasEmail, hasPhone, hasWebsite, leadFlagFilter, leadStatusFilter, searchLocation, statusFilter]);
+  const derivedLeadFilterOptions = useMemo(() => {
+    const businessTypeCounts = new Map<string, number>();
+    const searchLocationCounts = new Map<string, number>();
+    const pairCounts = new Map<string, number>();
+
+    (allLeadOptions.data?.leads ?? []).forEach((lead) => {
+      const parsed = parseLeadLocation(lead.location);
+      if (parsed.businessType) {
+        businessTypeCounts.set(parsed.businessType, (businessTypeCounts.get(parsed.businessType) ?? 0) + 1);
+      }
+      if (parsed.searchLocation) {
+        searchLocationCounts.set(parsed.searchLocation, (searchLocationCounts.get(parsed.searchLocation) ?? 0) + 1);
+      }
+      if (parsed.businessType && parsed.searchLocation) {
+        const key = `${parsed.businessType}\u0000${parsed.searchLocation}`;
+        pairCounts.set(key, (pairCounts.get(key) ?? 0) + 1);
+      }
+    });
+
+    return {
+      business_types: [...businessTypeCounts.entries()]
+        .map(([value, count]) => ({ value, count }))
+        .sort((a, b) => a.value.localeCompare(b.value)),
+      search_locations: [...searchLocationCounts.entries()]
+        .map(([value, count]) => ({ value, count }))
+        .sort((a, b) => a.value.localeCompare(b.value)),
+      pairs: [...pairCounts.entries()]
+        .map(([key, count]) => {
+          const [business_type, search_location] = key.split("\u0000");
+          return { business_type, search_location, count };
+        })
+        .sort((a, b) => (
+          a.business_type.localeCompare(b.business_type) ||
+          a.search_location.localeCompare(b.search_location)
+        )),
+    };
+  }, [allLeadOptions.data?.leads]);
+  const effectiveLeadFilterOptions = useMemo(() => {
+    const options = leadFilterOptions.data;
+    const hasCountedOptions = Boolean(options?.pairs?.length);
+    return hasCountedOptions ? options : derivedLeadFilterOptions;
+  }, [derivedLeadFilterOptions, leadFilterOptions.data]);
+  const filteredBusinessTypeOptions = useMemo(() => {
+    const options = effectiveLeadFilterOptions;
+    if (!options) return [];
+    if (!searchLocation) {
+      return options.business_types
+        .map(normalizeCountOption)
+        .filter((item): item is { value: string; count: number } => Boolean(item));
+    }
+
+    return options.pairs
+      .filter((pair) => (
+        pair.search_location === searchLocation &&
+        typeof pair.business_type === "string" &&
+        pair.business_type.trim()
+      ))
+      .map((pair) => ({
+        value: pair.business_type,
+        count: pair.count,
+      }))
+      .sort((a, b) => a.value.localeCompare(b.value));
+  }, [effectiveLeadFilterOptions, searchLocation]);
+  const filteredLocationOptions = useMemo(() => {
+    const options = effectiveLeadFilterOptions;
+    if (!options) return [];
+    if (!businessType) {
+      return options.search_locations
+        .map(normalizeCountOption)
+        .filter((item): item is { value: string; count: number } => Boolean(item));
+    }
+
+    return options.pairs
+      .filter((pair) => (
+        pair.business_type === businessType &&
+        typeof pair.search_location === "string" &&
+        pair.search_location.trim()
+      ))
+      .map((pair) => ({
+        value: pair.search_location,
+        count: pair.count,
+      }))
+      .sort((a, b) => a.value.localeCompare(b.value));
+  }, [businessType, effectiveLeadFilterOptions]);
   const previewLeads = useLeads(campaignFilters);
+
+  useEffect(() => {
+    if (!businessType) return;
+    const isValid = filteredBusinessTypeOptions.some((item) => item.value === businessType);
+    if (!isValid) setBusinessType("");
+  }, [businessType, filteredBusinessTypeOptions]);
+
+  useEffect(() => {
+    if (!searchLocation) return;
+    const isValid = filteredLocationOptions.some((item) => item.value === searchLocation);
+    if (!isValid) setSearchLocation("");
+  }, [filteredLocationOptions, searchLocation]);
 
   const selectedCampaign = campaigns.data?.campaigns.find((campaign) => campaign.campaign_id === selectedCampaignId);
   const campaign = useCampaign(selectedCampaignId);
@@ -1846,10 +2172,32 @@ function CampaignsPage() {
               <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Dentists London May 2026" />
             </Field>
             <Field label="Business type">
-              <input value={businessType} onChange={(event) => setBusinessType(event.target.value)} placeholder="dentist" />
+              <select
+                value={businessType}
+                onChange={(event) => setBusinessType(event.target.value)}
+                disabled={leadFilterOptions.isLoading && allLeadOptions.isLoading}
+              >
+                <option value="">Any business type</option>
+                {filteredBusinessTypeOptions.map((item) => (
+                  <option value={item.value} key={item.value}>
+                    {optionLabel(item)}
+                  </option>
+                ))}
+              </select>
             </Field>
             <Field label="Location">
-              <input value={searchLocation} onChange={(event) => setSearchLocation(event.target.value)} placeholder="London, UK" />
+              <select
+                value={searchLocation}
+                onChange={(event) => setSearchLocation(event.target.value)}
+                disabled={leadFilterOptions.isLoading && allLeadOptions.isLoading}
+              >
+                <option value="">Any location</option>
+                {filteredLocationOptions.map((item) => (
+                  <option value={item.value} key={item.value}>
+                    {optionLabel(item)}
+                  </option>
+                ))}
+              </select>
             </Field>
             <Field label="Scrape status">
               <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
@@ -1872,6 +2220,13 @@ function CampaignsPage() {
                 <option value="">Any</option>
                 <option value="true">Has website</option>
                 <option value="false">No website</option>
+              </select>
+            </Field>
+            <Field label="Phone">
+              <select value={hasPhone} onChange={(event) => setHasPhone(event.target.value)}>
+                <option value="">Any</option>
+                <option value="true">Has phone</option>
+                <option value="false">No phone</option>
               </select>
             </Field>
             <Field label="Flag">
@@ -1930,14 +2285,15 @@ function CampaignsPage() {
               </button>
             </div>
           </div>
-          <CampaignStageCounts campaign={activeCampaign} />
+          <CampaignStageCounts
+            campaign={activeCampaign}
+            activeStage={stageFilter}
+            onStageChange={(stage) => {
+              setStageFilter(stage);
+              setSelectedCampaignLeadId(undefined);
+            }}
+          />
           <div className="campaign-toolbar">
-            <Field label="Stage">
-              <select value={stageFilter} onChange={(event) => setStageFilter(event.target.value)}>
-                <option value="">Any stage</option>
-                {campaignStages.map((stage) => <option value={stage} key={stage}>{stage.replace("_", " ")}</option>)}
-              </select>
-            </Field>
             <Field label="Search">
               <input value={campaignSearch} onChange={(event) => setCampaignSearch(event.target.value)} placeholder="Name, address, email" />
             </Field>
@@ -1956,11 +2312,11 @@ function CampaignsPage() {
                 campaignLeadId: lead.campaign_lead_id,
                 payload: {
                   stage: payload.stage,
-                  priority: payload.priority !== undefined ? payload.priority : undefined,
-                  email_draft: payload.email_draft !== undefined ? payload.email_draft : undefined,
-                  final_email: payload.final_email !== undefined ? payload.final_email : undefined,
-                  campaign_notes: payload.campaign_notes !== undefined ? payload.campaign_notes : undefined,
-                  contacted_at: payload.contacted_at !== undefined ? payload.contacted_at : undefined,
+                  priority: payload.priority ?? undefined,
+                  email_draft: payload.email_draft ?? undefined,
+                  final_email: payload.final_email ?? undefined,
+                  campaign_notes: payload.campaign_notes ?? undefined,
+                  contacted_at: payload.contacted_at ?? undefined,
                 },
               })}
               updatingCampaignLeadId={updateCampaignLead.isPending ? updateCampaignLead.variables?.campaignLeadId : undefined}
