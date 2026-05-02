@@ -39,6 +39,8 @@ class TestDatabase:
             tables = [row[0] for row in cursor.fetchall()]
             assert 'job_executions' in tables
             assert 'leads' in tables
+            assert 'campaigns' in tables
+            assert 'campaign_leads' in tables
 
             cursor.execute("PRAGMA table_info(job_executions);")
             job_columns = [row[1] for row in cursor.fetchall()]
@@ -55,6 +57,16 @@ class TestDatabase:
             assert 'summary_source_url' in lead_columns
             assert 'summary_status' in lead_columns
             assert 'summary_updated_at' in lead_columns
+
+            cursor.execute("PRAGMA table_info(campaigns);")
+            campaign_columns = [row[1] for row in cursor.fetchall()]
+            assert 'campaign_id' in campaign_columns
+            assert 'filters_json' in campaign_columns
+
+            cursor.execute("PRAGMA table_info(campaign_leads);")
+            campaign_lead_columns = [row[1] for row in cursor.fetchall()]
+            assert 'campaign_lead_id' in campaign_lead_columns
+            assert 'stage' in campaign_lead_columns
 
     def test_init_db_adds_summary_columns_to_existing_leads_table(self, tmp_path):
         """Test that initialization migrates existing databases with summary columns."""
@@ -272,6 +284,40 @@ class TestDatabase:
             leads = checker.get_leads()
             assert len(leads) == 1
             assert leads[0]['name'] == "Original"
+
+    def test_create_campaign_from_lead_filters(self, temp_db):
+        """Test creating a campaign from existing lead filters."""
+        db, _ = temp_db
+        with db as conn:
+            conn.insert_job_execution("job1", "google_maps_scrape", "dentist:London, UK", status="completed")
+            execution = conn.get_job_execution("job1", "google_maps_scrape")
+            execution_id = execution["execution_id"]
+            conn.insert_lead(
+                execution_id=execution_id,
+                place_id="place1",
+                location="dentist:London, UK",
+                name="Good Dentist",
+                website="https://example.com",
+                emails="hello@example.com",
+            )
+            conn.update_lead("place1", execution_id=execution_id, status="scraped")
+
+            result = conn.create_campaign(
+                "Dentists London May 2026",
+                filters={"status": "scraped", "has_email": True, "business_type": "dentist", "search_location": "London, UK"},
+            )
+
+            assert result["added_leads"] == 1
+            assert result["campaign"]["business_type"] == "dentist"
+            assert result["campaign"]["search_location"] == "London, UK"
+
+            campaign_leads = conn.list_campaign_leads(result["campaign"]["campaign_id"])
+            assert len(campaign_leads) == 1
+            assert campaign_leads[0]["stage"] == "review"
+
+            leads = conn.list_leads()
+            assert leads[0]["campaign_count"] == 1
+            assert leads[0]["campaign_names"] == ["Dentists London May 2026"]
 
     def test_context_manager_commit(self, temp_db):
         """Test that changes are committed when the with block exits without an exception."""

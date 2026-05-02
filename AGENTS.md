@@ -31,6 +31,7 @@ Primary capabilities:
 5. Lead management UI: list/filter all leads, inspect details, copy contact data, open websites, edit website/emails/status/context.
 6. Job monitoring UI: list/filter jobs, inspect progress, stop running jobs.
 7. Dashboard summary: backend summary endpoint powers lead/job metric cards.
+8. Campaign workflow: create curated outreach lists from filtered leads, track campaign-specific stages, notes, final email text, contacted state, and export campaign leads.
 
 This is currently a local personal project. There is no authentication. Do not expose the backend publicly without adding auth, request caps, and rate limiting.
 
@@ -123,7 +124,7 @@ User action in React page
 |------|------|
 | `backend/app.py` | Flask app creation, root health route, API blueprint registration, UTF-8 tolerant stdout/stderr setup |
 | `backend/routes/api.py` | All REST endpoints for scraping, jobs, leads, summary, export |
-| `backend/database.py` | `Database` class, SQLite schema, context manager, thread-safe lock, query methods |
+| `backend/database.py` | `Database` class, SQLite schema, context manager, thread-safe lock, query methods for jobs, leads, email review, and campaigns |
 | `backend/app_settings.py` | `Config` class for paths, env vars, driver locations, log settings |
 | `config/job_functions.py` | `write_progress()` upserts job state; `check_stop_signal()` reads DB stop flag |
 | `config/logging.py` | `log_function_call` and `log_all_methods` decorators |
@@ -137,7 +138,7 @@ User action in React page
 | `pytest.ini` | Pytest collection config; keeps runtime temp folders out of test discovery |
 | `frontend/src/App.tsx` | Main React app shell, pages, tables, filters, job/lead panels |
 | `frontend/src/api/*` | Typed API clients for health, scraping, jobs, leads, summary |
-| `frontend/src/hooks/*` | TanStack Query hooks for server state, mutations, polling, export, updates |
+| `frontend/src/hooks/*` | TanStack Query hooks for server state, mutations, polling, export, updates, and campaign workflows |
 | `frontend/vite.config.ts` | Vite React plugin and dev proxy configuration |
 | `frontend/src/styles.css` | Application styling and responsive layouts |
 
@@ -179,6 +180,32 @@ Important columns:
 Uniqueness:
 - Leads are unique by `(execution_id, place_id)`.
 
+### `campaigns`
+
+Curated outreach lists created from filtered leads.
+
+Important columns:
+- `campaign_id`: integer primary key.
+- `name`: campaign name.
+- `business_type`, `search_location`: parsed from filters or `lead.location` values such as `dentist:London, UK`.
+- `filters_json`: creation filters used to select leads.
+- `status`: `draft`, `active`, `paused`, `completed`, or `archived`.
+- `notes`, `created_at`, `updated_at`.
+
+### `campaign_leads`
+
+Campaign-specific workflow rows linked to source leads.
+
+Important columns:
+- `campaign_lead_id`: integer primary key.
+- `campaign_id`, `lead_id`: foreign keys to campaigns and leads.
+- `stage`: `review`, `ready_for_email`, `drafted`, `approved`, `contacted`, `replied`, `closed`, `skipped`, or `do_not_contact`.
+- `priority`, `email_draft`, `final_email`, `campaign_notes`.
+- `contacted_at`, `created_at`, `updated_at`.
+
+Uniqueness:
+- Campaign lead membership is unique by `(campaign_id, lead_id)`.
+
 ## Job Status Values
 
 Normal lifecycle:
@@ -214,6 +241,13 @@ All API endpoints are mounted under `/api`, except Flask root health check `/`.
 | `GET` | `/api/leads` | List all leads with filters | Filters: `status`, `job_id`, `has_email=true/false`, `has_website=true/false` |
 | `PATCH` | `/api/leads/<lead_id>` | Manually edit lead fields | Editable: `website`, `emails`, `status`; validates website and emails |
 | `GET` | `/api/leads/export` | Export contact-ready leads | Default CSV; `?format=json` for JSON; only `status='scraped'` with phone or email |
+| `GET` | `/api/campaigns` | List campaigns with stage counts | Campaign list page |
+| `POST` | `/api/campaigns` | Create campaign from lead filters | Initial campaign lead stage is `review` |
+| `GET` | `/api/campaigns/<campaign_id>` | Get campaign details and stage counts | Campaign detail header |
+| `PATCH` | `/api/campaigns/<campaign_id>` | Edit campaign metadata | Editable: `name`, `status`, `notes` |
+| `GET` | `/api/campaigns/<campaign_id>/leads` | List campaign leads joined to lead data | Filters: `stage`, `lead_flag`, `lead_status`, `has_email`, `has_website`, `search` |
+| `PATCH` | `/api/campaign-leads/<campaign_lead_id>` | Update campaign lead workflow fields | Editable: `stage`, `priority`, `email_draft`, `final_email`, `campaign_notes`, `contacted_at` |
+| `GET` | `/api/campaigns/<campaign_id>/export` | Export campaign leads | Default CSV; `?format=json`; optional `stage` filter |
 | `GET` | `/api/jobs` | List job history with filters | Filters: `status`, `step_id`, `limit`; limit capped at 200 |
 | `GET` | `/api/summary` | Dashboard summary counts | Counts lead pipeline and job statuses |
 
@@ -328,6 +362,10 @@ Filters:
 - `job_id`
 - `has_email=true|false`
 - `has_website=true|false`
+- `lead_flag`
+- `lead_status`
+- `business_type`
+- `search_location`
 
 Response:
 
@@ -350,6 +388,15 @@ Response:
       "summary_source_url": "https://example.com/about",
       "summary_status": "captured",
       "summary_updated_at": "timestamp",
+      "campaign_count": 1,
+      "campaign_names": ["Dentists London May 2026"],
+      "campaign_memberships": [
+        {
+          "campaign_id": 1,
+          "campaign_name": "Dentists London May 2026",
+          "stage": "review"
+        }
+      ],
       "created_at": "timestamp",
       "updated_at": "timestamp",
       "job_id": "uuid",
@@ -454,6 +501,7 @@ Pages in `frontend/src/App.tsx`:
 | Website Emails | One-off website email scrape | `/api/scrape/website-emails` |
 | Enrich Leads | Start bulk email enrichment and poll progress | `/api/scrape/leads-emails`, `/api/progress/<job_id>`, `/api/stop/<job_id>` |
 | Leads | List/filter leads, row actions, detail panel, manual edits, CSV export | `/api/leads`, `/api/leads/<lead_id>`, `/api/leads/export` |
+| Campaigns | Create campaigns from lead filters, review campaign leads, update stages/priority/notes/final email, export campaign CSV | `/api/campaigns`, `/api/campaigns/<campaign_id>`, `/api/campaigns/<campaign_id>/leads`, `/api/campaign-leads/<campaign_lead_id>`, `/api/campaigns/<campaign_id>/export` |
 | Jobs | List/filter job history, select job details, stop running jobs | `/api/jobs`, `/api/progress/<job_id>`, `/api/stop/<job_id>` |
 | Settings | Static runtime info for local frontend/backend defaults | none |
 
@@ -588,3 +636,14 @@ Lead detail UI now supports:
 - Deleting bad emails.
 - Email review rows are vertically stacked in the narrow lead detail panel so long email addresses remain readable; controls appear below the email text.
 - Captured website context is shown in the lead detail panel with summary status, source URL, and last summary update timestamp.
+
+## Campaign Workflow
+
+Campaigns are a workflow layer over existing leads. Lead records remain the source of truth for business/contact data, and campaign stages do not overwrite base lead status.
+
+Current behavior:
+- Campaigns are created from filters matching `/api/leads`, including scrape status, email/website presence, lead flag, lead review status, business type, and search location.
+- Campaign creation stores the filters JSON and links matching leads in `campaign_leads` with initial stage `review`.
+- Leads can belong to multiple campaigns; `/api/leads` includes `campaign_count`, `campaign_names`, and detailed `campaign_memberships`.
+- The Leads tab shows a Campaign column and expanded lead details list campaign memberships.
+- The Campaigns tab lists campaigns, creates campaigns, opens campaign detail, filters campaign leads by stage/search, updates stage and priority inline, edits campaign notes/email draft/final email, marks leads contacted, and exports campaign CSV.

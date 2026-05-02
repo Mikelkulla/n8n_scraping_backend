@@ -13,6 +13,7 @@ import {
   Menu,
   Loader2,
   Mail,
+  Megaphone,
   Phone,
   Play,
   RotateCw,
@@ -24,10 +25,14 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { ApiError, type JobExecution, type JobStatus, type JobStepId, type Lead, type LeadEmail } from "./api";
+import { ApiError, type Campaign, type CampaignLead, type JobExecution, type JobStatus, type JobStepId, type Lead, type LeadEmail } from "./api";
 import {
   useAddLeadEmail,
   useBackendHealth,
+  useCampaign,
+  useCampaignLeads,
+  useCampaigns,
+  useCreateCampaign,
   useDeleteLeadEmail,
   useGoogleMapsScrape,
   useJobPolling,
@@ -37,13 +42,15 @@ import {
   useLeadEmailEnrichment,
   useStopJob,
   useSummary,
+  useUpdateCampaign,
+  useUpdateCampaignLead,
   useUpdateLeadEmail,
   useUpdateLead,
   useWebsiteEmailScrape,
 } from "./hooks";
-import { downloadExportedLeads } from "./hooks";
+import { downloadCampaignExport, downloadExportedLeads } from "./hooks";
 
-type PageId = "dashboard" | "discover" | "website" | "enrich" | "leads" | "jobs" | "settings";
+type PageId = "dashboard" | "discover" | "website" | "enrich" | "leads" | "campaigns" | "jobs" | "settings";
 
 const pages: Array<{ id: PageId; label: string; icon: typeof Activity }> = [
   { id: "dashboard", label: "Dashboard", icon: Activity },
@@ -51,6 +58,7 @@ const pages: Array<{ id: PageId; label: string; icon: typeof Activity }> = [
   { id: "website", label: "Website Emails", icon: Globe2 },
   { id: "enrich", label: "Enrich Leads", icon: Mail },
   { id: "leads", label: "Leads", icon: Table2 },
+  { id: "campaigns", label: "Campaigns", icon: Megaphone },
   { id: "jobs", label: "Jobs", icon: ClipboardList },
   { id: "settings", label: "Settings", icon: Settings },
 ];
@@ -59,6 +67,9 @@ const leadFlags = ["needs_review", "good", "bad", "hot"];
 const leadStatuses = ["new", "reviewed", "ready", "contacted", "do_not_contact"];
 const emailStatuses = ["new", "valid", "invalid", "do_not_use"];
 const emailCategories = ["unknown", "booking", "info", "sales", "support", "accounting", "manager"];
+const campaignStatuses = ["draft", "active", "paused", "completed", "archived"];
+const campaignStages = ["review", "ready_for_email", "drafted", "approved", "contacted", "replied", "closed", "skipped", "do_not_contact"];
+const campaignPriorities = ["", "low", "normal", "high"];
 
 function errorMessage(error: unknown) {
   if (error instanceof ApiError) return error.message;
@@ -249,6 +260,19 @@ function EmailListCell({ emails }: { emails?: string | null }) {
   );
 }
 
+function CampaignMembershipCell({ lead }: { lead: Lead }) {
+  const count = lead.campaign_count ?? lead.campaign_names?.length ?? 0;
+  const names = lead.campaign_names ?? [];
+
+  if (!count) return <span className="muted">-</span>;
+
+  return (
+    <span className="campaign-badge" title={names.join(", ")}>
+      {count === 1 ? names[0] : `${count} campaigns`}
+    </span>
+  );
+}
+
 function LeadsTable({
   leads,
   selectedLeadId,
@@ -287,6 +311,7 @@ function LeadsTable({
             <th>Phone</th>
             <th>Website</th>
             <th>Emails</th>
+            <th>Campaign</th>
             <th>Flag</th>
             <th>Lead status</th>
             {showActions && <th>Actions</th>}
@@ -296,7 +321,7 @@ function LeadsTable({
           {leads.map((lead, index) => {
             const rowKey = `${lead.place_id ?? lead.lead_id ?? index}-${index}`;
             const isSelected = selectedLeadId === lead.lead_id;
-            const columnCount = showActions ? 8 : 7;
+            const columnCount = showActions ? 9 : 8;
 
             return (
               <Fragment key={rowKey}>
@@ -321,6 +346,7 @@ function LeadsTable({
                     )}
                   </td>
                   <td className="email-cell"><EmailListCell emails={lead.emails} /></td>
+                  <td><CampaignMembershipCell lead={lead} /></td>
                   <td>
                     <EditableFlagBadge
                       value={lead.lead_flag}
@@ -1198,6 +1224,20 @@ function LeadDetailPanel({
           <span className="label">Summary status</span>
           <strong>{lead.summary_status || "-"}</strong>
         </div>
+        <div className="detail-wide">
+          <span className="label">Campaigns</span>
+          {lead.campaign_memberships?.length ? (
+            <div className="chips">
+              {lead.campaign_memberships.map((membership) => (
+                <span className="chip" key={`${membership.campaign_id}-${membership.stage}`}>
+                  {membership.campaign_name} - {membership.stage.replace("_", " ")}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <strong>-</strong>
+          )}
+        </div>
       </div>
       <form className="edit-form" onSubmit={submit}>
         <Field label="Website">
@@ -1485,6 +1525,454 @@ function LeadsPage() {
   );
 }
 
+function CampaignStageCounts({ campaign }: { campaign: Campaign }) {
+  return (
+    <div className="stage-counts">
+      {campaignStages.slice(0, 7).map((stage) => (
+        <span key={stage}>
+          {stage.replace("_", " ")} <strong>{Number(campaign[stage as keyof Campaign] ?? 0)}</strong>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function CampaignLeadsTable({
+  leads,
+  selectedCampaignLeadId,
+  onSelectLead,
+  onUpdate,
+  updatingCampaignLeadId,
+}: {
+  leads: CampaignLead[];
+  selectedCampaignLeadId?: number;
+  onSelectLead: (lead: CampaignLead) => void;
+  onUpdate: (lead: CampaignLead, payload: Partial<CampaignLead>) => void;
+  updatingCampaignLeadId?: number;
+}) {
+  if (!leads.length) {
+    return <EmptyState title="No campaign leads" body="Adjust filters or create a campaign from matching leads." />;
+  }
+
+  return (
+    <div className="table-wrap">
+      <table className="campaign-leads-table">
+        <thead>
+          <tr>
+            <th>Lead</th>
+            <th>Email</th>
+            <th>Website</th>
+            <th>Flag</th>
+            <th>Stage</th>
+            <th>Priority</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {leads.map((lead) => {
+            const isSelected = selectedCampaignLeadId === lead.campaign_lead_id;
+            return (
+              <Fragment key={lead.campaign_lead_id}>
+                <tr
+                  className={[isSelected ? "selected-row" : "", "clickable-row"].join(" ")}
+                  onClick={() => onSelectLead(lead)}
+                >
+                  <td>
+                    <strong>{lead.name || "Untitled"}</strong>
+                    <span className="muted">{lead.address || lead.location || "-"}</span>
+                  </td>
+                  <td className="email-cell"><EmailListCell emails={lead.primary_email || lead.emails} /></td>
+                  <td className="url-cell">
+                    {lead.website ? <a href={lead.website} target="_blank" rel="noreferrer">{lead.website}</a> : "-"}
+                  </td>
+                  <td><FlagBadge flag={lead.lead_flag} /></td>
+                  <td>
+                    <select
+                      value={lead.stage}
+                      disabled={updatingCampaignLeadId === lead.campaign_lead_id}
+                      onClick={(event) => event.stopPropagation()}
+                      onChange={(event) => onUpdate(lead, { stage: event.target.value })}
+                    >
+                      {campaignStages.map((stage) => (
+                        <option value={stage} key={stage}>{stage.replace("_", " ")}</option>
+                      ))}
+                    </select>
+                  </td>
+                  <td>
+                    <select
+                      value={lead.priority || ""}
+                      disabled={updatingCampaignLeadId === lead.campaign_lead_id}
+                      onClick={(event) => event.stopPropagation()}
+                      onChange={(event) => onUpdate(lead, { priority: event.target.value })}
+                    >
+                      {campaignPriorities.map((priority) => (
+                        <option value={priority} key={priority}>{priority || "None"}</option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="actions-cell">
+                    <div className="actions-row">
+                      <button
+                        className="icon-button"
+                        type="button"
+                        disabled={!lead.website}
+                        title={lead.website ? "Open website" : "No website"}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          if (lead.website) window.open(lead.website, "_blank", "noopener,noreferrer");
+                        }}
+                      >
+                        <ExternalLink size={15} />
+                      </button>
+                      <button
+                        className="icon-button"
+                        type="button"
+                        title="Copy lead"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          copyToClipboard(formatLeadAsText(lead));
+                        }}
+                      >
+                        <Copy size={15} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+                {isSelected && (
+                  <tr className="expanded-detail-row">
+                    <td colSpan={7}>
+                      <CampaignLeadDetail lead={lead} onUpdate={onUpdate} />
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function CampaignLeadDetail({
+  lead,
+  onUpdate,
+}: {
+  lead: CampaignLead;
+  onUpdate: (lead: CampaignLead, payload: Partial<CampaignLead>) => void;
+}) {
+  const [campaignNotes, setCampaignNotes] = useState(lead.campaign_notes ?? "");
+  const [emailDraft, setEmailDraft] = useState(lead.email_draft ?? "");
+  const [finalEmail, setFinalEmail] = useState(lead.final_email ?? "");
+
+  useEffect(() => {
+    setCampaignNotes(lead.campaign_notes ?? "");
+    setEmailDraft(lead.email_draft ?? "");
+    setFinalEmail(lead.final_email ?? "");
+  }, [lead]);
+
+  return (
+    <section className="panel">
+      <div className="detail-grid">
+        <div>
+          <span className="label">Phone</span>
+          <strong>{lead.phone || "-"}</strong>
+        </div>
+        <div>
+          <span className="label">Primary email</span>
+          <strong>{lead.primary_email || lead.emails || "-"}</strong>
+        </div>
+        <div>
+          <span className="label">Lead review</span>
+          <strong>{lead.lead_status || "-"}</strong>
+        </div>
+        <div>
+          <span className="label">Contacted</span>
+          <strong>{lead.contacted_at || "-"}</strong>
+        </div>
+        <div className="detail-wide">
+          <span className="label">Website context</span>
+          <p className="context-text">{lead.website_summary || "No captured website context."}</p>
+        </div>
+      </div>
+      <div className="campaign-edit-grid">
+        <Field label="Campaign notes">
+          <AutoResizeTextarea value={campaignNotes} onChange={(event) => setCampaignNotes(event.target.value)} />
+        </Field>
+        <Field label="Email draft">
+          <AutoResizeTextarea value={emailDraft} onChange={(event) => setEmailDraft(event.target.value)} />
+        </Field>
+        <Field label="Final email">
+          <AutoResizeTextarea value={finalEmail} onChange={(event) => setFinalEmail(event.target.value)} />
+        </Field>
+      </div>
+      <div className="button-row">
+        <button
+          type="button"
+          className="secondary"
+          onClick={() => onUpdate(lead, {
+            campaign_notes: campaignNotes,
+            email_draft: emailDraft,
+            final_email: finalEmail,
+          })}
+        >
+          <CheckCircle2 size={17} />
+          Save campaign fields
+        </button>
+        <button
+          type="button"
+          className="secondary"
+          onClick={() => onUpdate(lead, {
+            stage: "contacted",
+            contacted_at: new Date().toISOString(),
+          })}
+        >
+          <Mail size={17} />
+          Mark contacted
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function CampaignsPage() {
+  const campaigns = useCampaigns();
+  const createCampaign = useCreateCampaign();
+  const updateCampaign = useUpdateCampaign();
+  const updateCampaignLead = useUpdateCampaignLead();
+  const [selectedCampaignId, setSelectedCampaignId] = useState<number>();
+  const [selectedCampaignLeadId, setSelectedCampaignLeadId] = useState<number>();
+  const [name, setName] = useState("");
+  const [businessType, setBusinessType] = useState("");
+  const [searchLocation, setSearchLocation] = useState("");
+  const [statusFilter, setStatusFilter] = useState("scraped");
+  const [hasEmail, setHasEmail] = useState("true");
+  const [hasWebsite, setHasWebsite] = useState("");
+  const [leadFlagFilter, setLeadFlagFilter] = useState("");
+  const [leadStatusFilter, setLeadStatusFilter] = useState("");
+  const [notes, setNotes] = useState("");
+  const [stageFilter, setStageFilter] = useState("");
+  const [campaignSearch, setCampaignSearch] = useState("");
+  const campaignFilters = useMemo(() => ({
+    status: statusFilter || undefined,
+    has_email: hasEmail === "" ? undefined : hasEmail === "true",
+    has_website: hasWebsite === "" ? undefined : hasWebsite === "true",
+    lead_flag: leadFlagFilter || undefined,
+    lead_status: leadStatusFilter || undefined,
+    business_type: businessType || undefined,
+    search_location: searchLocation || undefined,
+  }), [businessType, hasEmail, hasWebsite, leadFlagFilter, leadStatusFilter, searchLocation, statusFilter]);
+  const previewLeads = useLeads(campaignFilters);
+
+  const selectedCampaign = campaigns.data?.campaigns.find((campaign) => campaign.campaign_id === selectedCampaignId);
+  const campaign = useCampaign(selectedCampaignId);
+  const campaignLeads = useCampaignLeads(selectedCampaignId, {
+    stage: stageFilter || undefined,
+    search: campaignSearch || undefined,
+  });
+  const activeCampaign = campaign.data?.campaign ?? selectedCampaign;
+
+  function submitCampaign(event: FormEvent) {
+    event.preventDefault();
+    createCampaign.mutate({
+      name,
+      notes,
+      filters: campaignFilters,
+    }, {
+      onSuccess: (response) => {
+        setSelectedCampaignId(response.campaign.campaign_id);
+        setName("");
+        setNotes("");
+      },
+    });
+  }
+
+  return (
+    <>
+      <PageHeader
+        title="Campaigns"
+        description="Create working lists from filtered leads and track outreach-specific stages."
+      />
+      <section className="campaigns-layout">
+        <section className="panel">
+          <div className="section-head">
+            <div>
+              <h2>Campaign list</h2>
+              <p>{campaigns.data?.count ?? 0} campaigns</p>
+            </div>
+          </div>
+          {campaigns.isLoading ? (
+            <div className="muted">Loading campaigns...</div>
+          ) : campaigns.isError ? (
+            <ErrorAlert error={campaigns.error} />
+          ) : !campaigns.data?.campaigns.length ? (
+            <EmptyState title="No campaigns yet" body="Create one from lead filters to start a curated workflow." />
+          ) : (
+            <div className="campaign-list">
+              {campaigns.data.campaigns.map((item) => (
+                <button
+                  type="button"
+                  className={`campaign-list-item ${selectedCampaignId === item.campaign_id ? "active" : ""}`}
+                  key={item.campaign_id}
+                  onClick={() => {
+                    setSelectedCampaignId(item.campaign_id);
+                    setSelectedCampaignLeadId(undefined);
+                  }}
+                >
+                  <span>
+                    <strong>{item.name}</strong>
+                    <small>{item.business_type || "-"} / {item.search_location || "-"}</small>
+                  </span>
+                  <StatusBadge status={item.status} />
+                  <span className="muted">{item.total_leads} leads</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+        <section className="panel">
+          <div className="section-head">
+            <div>
+              <h2>Create campaign</h2>
+              <p>
+                {previewLeads.isLoading
+                  ? "Checking matching leads..."
+                  : `${previewLeads.data?.count ?? 0} matching leads`}
+              </p>
+            </div>
+          </div>
+          <form className="campaign-create-form" onSubmit={submitCampaign}>
+            <Field label="Name">
+              <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Dentists London May 2026" />
+            </Field>
+            <Field label="Business type">
+              <input value={businessType} onChange={(event) => setBusinessType(event.target.value)} placeholder="dentist" />
+            </Field>
+            <Field label="Location">
+              <input value={searchLocation} onChange={(event) => setSearchLocation(event.target.value)} placeholder="London, UK" />
+            </Field>
+            <Field label="Scrape status">
+              <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+                <option value="">Any</option>
+                <option value="scraped">Scraped</option>
+                <option value="failed">Failed</option>
+                <option value="skipped">Skipped</option>
+                <option value="pending">Pending</option>
+              </select>
+            </Field>
+            <Field label="Email">
+              <select value={hasEmail} onChange={(event) => setHasEmail(event.target.value)}>
+                <option value="">Any</option>
+                <option value="true">Has email</option>
+                <option value="false">No email</option>
+              </select>
+            </Field>
+            <Field label="Website">
+              <select value={hasWebsite} onChange={(event) => setHasWebsite(event.target.value)}>
+                <option value="">Any</option>
+                <option value="true">Has website</option>
+                <option value="false">No website</option>
+              </select>
+            </Field>
+            <Field label="Flag">
+              <select value={leadFlagFilter} onChange={(event) => setLeadFlagFilter(event.target.value)}>
+                <option value="">Any</option>
+                {leadFlags.map((flag) => <option value={flag} key={flag}>{flag.replace("_", " ")}</option>)}
+              </select>
+            </Field>
+            <Field label="Review">
+              <select value={leadStatusFilter} onChange={(event) => setLeadStatusFilter(event.target.value)}>
+                <option value="">Any</option>
+                {leadStatuses.map((item) => <option value={item} key={item}>{item.replace("_", " ")}</option>)}
+              </select>
+            </Field>
+            <Field label="Notes" className="detail-wide">
+              <AutoResizeTextarea value={notes} onChange={(event) => setNotes(event.target.value)} />
+            </Field>
+            <button type="submit" disabled={createCampaign.isPending || !name.trim()}>
+              {createCampaign.isPending ? <Loader2 className="spin" size={17} /> : <Megaphone size={17} />}
+              Create campaign
+            </button>
+            <ErrorAlert error={createCampaign.error} />
+            {createCampaign.data && (
+              <div className="alert">
+                Added {createCampaign.data.added_leads} leads to {createCampaign.data.campaign.name}.
+              </div>
+            )}
+          </form>
+        </section>
+      </section>
+
+      {activeCampaign && (
+        <section className="panel campaign-detail">
+          <div className="section-head">
+            <div>
+              <h2>{activeCampaign.name}</h2>
+              <p>{activeCampaign.business_type || "-"} / {activeCampaign.search_location || "-"} / {activeCampaign.total_leads} leads</p>
+            </div>
+            <div className="topbar-actions">
+              <select
+                value={activeCampaign.status}
+                onChange={(event) => updateCampaign.mutate({
+                  campaignId: activeCampaign.campaign_id,
+                  payload: { status: event.target.value },
+                })}
+              >
+                {campaignStatuses.map((item) => <option value={item} key={item}>{item}</option>)}
+              </select>
+              <button
+                className="secondary"
+                type="button"
+                onClick={() => void downloadCampaignExport(activeCampaign.campaign_id, stageFilter || undefined)}
+              >
+                <Download size={17} />
+                Export
+              </button>
+            </div>
+          </div>
+          <CampaignStageCounts campaign={activeCampaign} />
+          <div className="campaign-toolbar">
+            <Field label="Stage">
+              <select value={stageFilter} onChange={(event) => setStageFilter(event.target.value)}>
+                <option value="">Any stage</option>
+                {campaignStages.map((stage) => <option value={stage} key={stage}>{stage.replace("_", " ")}</option>)}
+              </select>
+            </Field>
+            <Field label="Search">
+              <input value={campaignSearch} onChange={(event) => setCampaignSearch(event.target.value)} placeholder="Name, address, email" />
+            </Field>
+          </div>
+          {campaignLeads.isLoading ? (
+            <div className="muted">Loading campaign leads...</div>
+          ) : campaignLeads.isError ? (
+            <ErrorAlert error={campaignLeads.error} />
+          ) : (
+            <CampaignLeadsTable
+              leads={campaignLeads.data?.leads ?? []}
+              selectedCampaignLeadId={selectedCampaignLeadId}
+              onSelectLead={(lead) => setSelectedCampaignLeadId((current) => current === lead.campaign_lead_id ? undefined : lead.campaign_lead_id)}
+              onUpdate={(lead, payload) => updateCampaignLead.mutate({
+                campaignId: lead.campaign_id,
+                campaignLeadId: lead.campaign_lead_id,
+                payload: {
+                  stage: payload.stage,
+                  priority: payload.priority !== undefined ? payload.priority : undefined,
+                  email_draft: payload.email_draft !== undefined ? payload.email_draft : undefined,
+                  final_email: payload.final_email !== undefined ? payload.final_email : undefined,
+                  campaign_notes: payload.campaign_notes !== undefined ? payload.campaign_notes : undefined,
+                  contacted_at: payload.contacted_at !== undefined ? payload.contacted_at : undefined,
+                },
+              })}
+              updatingCampaignLeadId={updateCampaignLead.isPending ? updateCampaignLead.variables?.campaignLeadId : undefined}
+            />
+          )}
+          <ErrorAlert error={updateCampaign.error || updateCampaignLead.error} />
+        </section>
+      )}
+    </>
+  );
+}
+
 function SettingsPage() {
   return (
     <>
@@ -1515,6 +2003,7 @@ function CurrentPage({ page }: { page: PageId }) {
   if (page === "website") return <WebsiteEmailPage />;
   if (page === "enrich") return <EnrichPage />;
   if (page === "leads") return <LeadsPage />;
+  if (page === "campaigns") return <CampaignsPage />;
   if (page === "jobs") return <JobsPage />;
   if (page === "settings") return <SettingsPage />;
   return <DashboardPage />;

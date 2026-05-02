@@ -553,6 +553,201 @@ def _parse_bool_query(value):
     raise ValueError("Expected boolean query value: true or false")
 
 
+def _parse_optional_bool(value):
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, str):
+        return _parse_bool_query(value)
+    raise ValueError("Expected boolean value")
+
+
+@api_bp.route("/campaigns", methods=["GET"])
+@log_function_call
+def list_campaigns():
+    """Lists campaigns with stage counts."""
+    try:
+        with Database() as db:
+            campaigns = db.list_campaigns()
+        return jsonify({"count": len(campaigns), "campaigns": campaigns}), 200
+    except Exception as e:
+        logging.error(f"Error listing campaigns: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/campaigns", methods=["POST"])
+@log_function_call
+def create_campaign():
+    """Creates a campaign from lead filters."""
+    try:
+        data = request.get_json() or {}
+        name = data.get("name")
+        filters = data.get("filters") or {}
+
+        if not isinstance(name, str) or not name.strip():
+            return jsonify({"error": "Campaign name is required"}), 400
+        if not isinstance(filters, dict):
+            return jsonify({"error": "filters must be an object"}), 400
+
+        for bool_key in ["has_email", "has_website"]:
+            if bool_key in filters:
+                filters[bool_key] = _parse_optional_bool(filters.get(bool_key))
+
+        with Database() as db:
+            result = db.create_campaign(
+                name=name.strip(),
+                filters=filters,
+                notes=data.get("notes"),
+            )
+
+        return jsonify(result), 201
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logging.error(f"Error creating campaign: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/campaigns/<int:campaign_id>", methods=["GET"])
+@log_function_call
+def get_campaign(campaign_id):
+    """Returns one campaign with stage counts."""
+    try:
+        with Database() as db:
+            campaign = db.get_campaign(campaign_id)
+
+        if not campaign:
+            return jsonify({"error": f"Campaign {campaign_id} not found"}), 404
+
+        return jsonify({"campaign": campaign}), 200
+    except Exception as e:
+        logging.error(f"Error fetching campaign {campaign_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/campaigns/<int:campaign_id>", methods=["PATCH"])
+@log_function_call
+def patch_campaign(campaign_id):
+    """Updates campaign metadata."""
+    try:
+        data = request.get_json() or {}
+        allowed_fields = {"name", "status", "notes"}
+        update_data = {key: data[key] for key in allowed_fields if key in data}
+
+        if not update_data:
+            return jsonify({"error": "Provide at least one editable field: name, status, notes"}), 400
+
+        if "name" in update_data and not str(update_data["name"]).strip():
+            return jsonify({"error": "Campaign name cannot be empty"}), 400
+
+        with Database() as db:
+            campaign = db.update_campaign(campaign_id=campaign_id, **update_data)
+
+        if not campaign:
+            return jsonify({"error": f"Campaign {campaign_id} not found"}), 404
+
+        return jsonify({"campaign": campaign}), 200
+    except Exception as e:
+        logging.error(f"Error updating campaign {campaign_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/campaigns/<int:campaign_id>/leads", methods=["GET"])
+@log_function_call
+def list_campaign_leads(campaign_id):
+    """Lists campaign lead workflow rows joined to lead data."""
+    try:
+        has_email = _parse_bool_query(request.args.get("has_email"))
+        has_website = _parse_bool_query(request.args.get("has_website"))
+
+        with Database() as db:
+            campaign = db.get_campaign(campaign_id)
+            if not campaign:
+                return jsonify({"error": f"Campaign {campaign_id} not found"}), 404
+            leads = db.list_campaign_leads(
+                campaign_id=campaign_id,
+                stage=request.args.get("stage"),
+                lead_flag=request.args.get("lead_flag"),
+                lead_status=request.args.get("lead_status"),
+                has_email=has_email,
+                has_website=has_website,
+                search=request.args.get("search"),
+            )
+
+        return jsonify({"count": len(leads), "leads": leads}), 200
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logging.error(f"Error listing campaign leads for {campaign_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/campaign-leads/<int:campaign_lead_id>", methods=["PATCH"])
+@log_function_call
+def patch_campaign_lead(campaign_lead_id):
+    """Updates campaign lead workflow fields."""
+    try:
+        data = request.get_json() or {}
+        allowed_fields = {"stage", "priority", "email_draft", "final_email", "campaign_notes", "contacted_at"}
+        update_data = {key: data[key] for key in allowed_fields if key in data}
+
+        if not update_data:
+            return jsonify({"error": "Provide at least one editable campaign lead field"}), 400
+
+        with Database() as db:
+            campaign_lead = db.update_campaign_lead(campaign_lead_id=campaign_lead_id, **update_data)
+
+        if not campaign_lead:
+            return jsonify({"error": f"Campaign lead {campaign_lead_id} not found"}), 404
+
+        return jsonify({"campaign_lead": campaign_lead}), 200
+    except Exception as e:
+        logging.error(f"Error updating campaign lead {campaign_lead_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/campaigns/<int:campaign_id>/export", methods=["GET"])
+@log_function_call
+def export_campaign(campaign_id):
+    """Exports campaign leads as CSV or JSON."""
+    try:
+        fmt = request.args.get("format", "csv").lower()
+        stage = request.args.get("stage")
+
+        with Database() as db:
+            campaign = db.get_campaign(campaign_id)
+            if not campaign:
+                return jsonify({"error": f"Campaign {campaign_id} not found"}), 404
+            leads = db.list_campaign_leads(campaign_id=campaign_id, stage=stage)
+
+        if fmt == "json":
+            return jsonify({"count": len(leads), "campaign": campaign, "leads": leads}), 200
+
+        fields = [
+            "campaign_name", "business_type", "search_location", "lead_name", "address",
+            "phone", "website", "emails", "primary_email", "stage", "priority",
+            "website_summary", "campaign_notes", "final_email"
+        ]
+        export_rows = []
+        for lead in leads:
+            row = dict(lead)
+            row["lead_name"] = row.get("name")
+            export_rows.append(row)
+        output = io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(export_rows)
+
+        filename = f"campaign_{campaign_id}_export.csv"
+        return Response(
+            output.getvalue(),
+            mimetype="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    except Exception as e:
+        logging.error(f"Error exporting campaign {campaign_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @api_bp.route("/leads", methods=["GET"])
 @log_function_call
 def list_leads():
@@ -574,6 +769,8 @@ def list_leads():
         job_id = request.args.get("job_id")
         lead_flag = request.args.get("lead_flag")
         lead_status = request.args.get("lead_status")
+        business_type = request.args.get("business_type")
+        search_location = request.args.get("search_location")
         has_email = _parse_bool_query(request.args.get("has_email"))
         has_website = _parse_bool_query(request.args.get("has_website"))
 
@@ -583,6 +780,8 @@ def list_leads():
                 job_id=job_id,
                 lead_flag=lead_flag,
                 lead_status=lead_status,
+                business_type=business_type,
+                search_location=search_location,
                 has_email=has_email,
                 has_website=has_website
             )
