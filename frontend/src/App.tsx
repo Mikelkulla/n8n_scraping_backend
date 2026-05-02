@@ -10,6 +10,7 @@ import {
   Download,
   ExternalLink,
   Globe2,
+  Menu,
   Loader2,
   Mail,
   Phone,
@@ -17,19 +18,26 @@ import {
   RotateCw,
   Search,
   Settings,
+  Star,
   Square,
   Table2,
+  Trash2,
+  X,
 } from "lucide-react";
-import { ApiError, type JobExecution, type JobStatus, type JobStepId, type Lead } from "./api";
+import { ApiError, type JobExecution, type JobStatus, type JobStepId, type Lead, type LeadEmail } from "./api";
 import {
+  useAddLeadEmail,
   useBackendHealth,
+  useDeleteLeadEmail,
   useGoogleMapsScrape,
   useJobPolling,
   useJobs,
+  useLeadEmails,
   useLeads,
   useLeadEmailEnrichment,
   useStopJob,
   useSummary,
+  useUpdateLeadEmail,
   useUpdateLead,
   useWebsiteEmailScrape,
 } from "./hooks";
@@ -47,6 +55,11 @@ const pages: Array<{ id: PageId; label: string; icon: typeof Activity }> = [
   { id: "settings", label: "Settings", icon: Settings },
 ];
 
+const leadFlags = ["needs_review", "good", "bad", "hot"];
+const leadStatuses = ["new", "reviewed", "ready", "contacted", "do_not_contact"];
+const emailStatuses = ["new", "valid", "invalid", "do_not_use"];
+const emailCategories = ["unknown", "booking", "info", "sales", "support", "accounting", "manager"];
+
 function errorMessage(error: unknown) {
   if (error instanceof ApiError) return error.message;
   if (error instanceof Error) return error.message;
@@ -60,6 +73,11 @@ function StatusBadge({
 }) {
   const label = status ?? "unknown";
   return <span className={`status status-${label}`}>{label}</span>;
+}
+
+function FlagBadge({ flag }: { flag?: string | null }) {
+  if (!flag) return <span className="muted">-</span>;
+  return <span className={`flag flag-${flag}`}>{flag.replace("_", " ")}</span>;
 }
 
 function PageHeader({
@@ -171,7 +189,8 @@ function LeadsTable({
             <th>Phone</th>
             <th>Website</th>
             <th>Emails</th>
-            <th>Status</th>
+            <th>Flag</th>
+            <th>Lead status</th>
             {showActions && <th>Actions</th>}
           </tr>
         </thead>
@@ -182,6 +201,7 @@ function LeadsTable({
               className={[
                 selectedLeadId === lead.lead_id ? "selected-row" : "",
                 onSelectLead ? "clickable-row" : "",
+                lead.status ? `lead-row-${lead.status}` : "",
               ].filter(Boolean).join(" ")}
               onClick={() => onSelectLead?.(lead)}
             >
@@ -198,56 +218,59 @@ function LeadsTable({
                 )}
               </td>
               <td className="email-cell"><EmailListCell emails={lead.emails} /></td>
-              <td>{lead.status ? <StatusBadge status={lead.status} /> : "-"}</td>
+              <td><FlagBadge flag={lead.lead_flag} /></td>
+              <td>{lead.lead_status ? <StatusBadge status={lead.lead_status} /> : "-"}</td>
               {showActions && (
                 <td className="actions-cell">
-                  <button
-                    className="icon-button"
-                    type="button"
-                    disabled={!lead.website}
-                    title={lead.website ? "Open website" : "No website"}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      if (lead.website) window.open(lead.website, "_blank", "noopener,noreferrer");
-                    }}
-                  >
-                    <ExternalLink size={15} />
-                  </button>
-                  <button
-                    className="icon-button"
-                    type="button"
-                    disabled={!lead.emails}
-                    title={lead.emails ? "Copy email" : "No email"}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      copyToClipboard(lead.emails ?? "");
-                    }}
-                  >
-                    <Mail size={15} />
-                  </button>
-                  <button
-                    className="icon-button"
-                    type="button"
-                    disabled={!lead.phone}
-                    title={lead.phone ? "Copy phone" : "No phone"}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      copyToClipboard(lead.phone ?? "");
-                    }}
-                  >
-                    <Phone size={15} />
-                  </button>
-                  <button
-                    className="icon-button"
-                    type="button"
-                    title="Copy lead"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      copyToClipboard(formatLeadAsText(lead));
-                    }}
-                  >
-                    <Copy size={15} />
-                  </button>
+                  <div className="actions-row">
+                    <button
+                      className="icon-button"
+                      type="button"
+                      disabled={!lead.website}
+                      title={lead.website ? "Open website" : "No website"}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        if (lead.website) window.open(lead.website, "_blank", "noopener,noreferrer");
+                      }}
+                    >
+                      <ExternalLink size={15} />
+                    </button>
+                    <button
+                      className="icon-button"
+                      type="button"
+                      disabled={!lead.emails}
+                      title={lead.emails ? "Copy email" : "No email"}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        copyToClipboard(lead.emails ?? "");
+                      }}
+                    >
+                      <Mail size={15} />
+                    </button>
+                    <button
+                      className="icon-button"
+                      type="button"
+                      disabled={!lead.phone}
+                      title={lead.phone ? "Copy phone" : "No phone"}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        copyToClipboard(lead.phone ?? "");
+                      }}
+                    >
+                      <Phone size={15} />
+                    </button>
+                    <button
+                      className="icon-button"
+                      type="button"
+                      title="Copy lead"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        copyToClipboard(formatLeadAsText(lead));
+                      }}
+                    >
+                      <Copy size={15} />
+                    </button>
+                  </div>
                 </td>
               )}
             </tr>
@@ -866,6 +889,77 @@ function EnrichPage() {
   );
 }
 
+function EmailReviewRow({
+  email,
+  onUpdate,
+  onDelete,
+}: {
+  email: LeadEmail;
+  onUpdate: (payload: {
+    category?: string;
+    status?: string;
+    is_primary?: boolean;
+    notes?: string;
+  }) => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div className="email-review-row">
+      <div className="email-review-main">
+        <strong>{email.email}</strong>
+        <div className="email-review-meta">
+          {email.is_primary ? <span className="flag flag-hot">primary</span> : null}
+          <StatusBadge status={email.status} />
+          <span className="muted">{email.category}</span>
+        </div>
+      </div>
+      <select
+        value={email.category}
+        onChange={(event) => onUpdate({ category: event.target.value })}
+      >
+        {emailCategories.map((category) => (
+          <option value={category} key={category}>{category}</option>
+        ))}
+      </select>
+      <select
+        value={email.status}
+        onChange={(event) => onUpdate({ status: event.target.value })}
+      >
+        {emailStatuses.map((status) => (
+          <option value={status} key={status}>{status.replace("_", " ")}</option>
+        ))}
+      </select>
+      <div className="email-review-actions">
+        <button
+          className="icon-button"
+          type="button"
+          title="Mark primary"
+          disabled={Boolean(email.is_primary)}
+          onClick={() => onUpdate({ is_primary: true })}
+        >
+          <Star size={15} />
+        </button>
+        <button
+          className="icon-button"
+          type="button"
+          title="Copy email"
+          onClick={() => copyToClipboard(email.email)}
+        >
+          <Copy size={15} />
+        </button>
+        <button
+          className="icon-button danger-text"
+          type="button"
+          title="Delete email"
+          onClick={onDelete}
+        >
+          <Trash2 size={15} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function LeadDetailPanel({
   lead,
   onLeadUpdated,
@@ -874,14 +968,25 @@ function LeadDetailPanel({
   onLeadUpdated?: (lead: Lead) => void;
 }) {
   const updateLead = useUpdateLead();
+  const leadEmails = useLeadEmails(lead?.lead_id);
+  const addEmail = useAddLeadEmail();
+  const updateEmail = useUpdateLeadEmail();
+  const deleteEmail = useDeleteLeadEmail();
   const [website, setWebsite] = useState("");
   const [emails, setEmails] = useState("");
   const [status, setStatus] = useState("");
+  const [leadFlag, setLeadFlag] = useState("needs_review");
+  const [leadStatus, setLeadStatus] = useState("new");
+  const [notes, setNotes] = useState("");
+  const [newEmail, setNewEmail] = useState("");
 
   useEffect(() => {
     setWebsite(lead?.website ?? "");
     setEmails(lead?.emails ?? "");
     setStatus(lead?.status ?? "");
+    setLeadFlag(lead?.lead_flag ?? "needs_review");
+    setLeadStatus(lead?.lead_status ?? "new");
+    setNotes(lead?.notes ?? "");
   }, [lead]);
 
   if (!lead) {
@@ -901,6 +1006,9 @@ function LeadDetailPanel({
         website,
         emails,
         status,
+        lead_flag: leadFlag,
+        lead_status: leadStatus,
+        notes,
       },
     }, {
       onSuccess: (response) => onLeadUpdated?.(response.lead),
@@ -914,7 +1022,10 @@ function LeadDetailPanel({
           <h2>{lead.name || "Untitled lead"}</h2>
           <p>{lead.address || lead.location || "No location"}</p>
         </div>
-        {lead.status && <StatusBadge status={lead.status} />}
+        <div className="stack">
+          <FlagBadge flag={lead.lead_flag} />
+          {lead.lead_status && <StatusBadge status={lead.lead_status} />}
+        </div>
       </div>
       <div className="detail-grid">
         <div>
@@ -950,12 +1061,90 @@ function LeadDetailPanel({
             <option value="pending">Pending</option>
           </select>
         </Field>
+        <Field label="Lead flag">
+          <select value={leadFlag} onChange={(event) => setLeadFlag(event.target.value)}>
+            {leadFlags.map((flag) => (
+              <option value={flag} key={flag}>{flag.replace("_", " ")}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Lead status">
+          <select value={leadStatus} onChange={(event) => setLeadStatus(event.target.value)}>
+            {leadStatuses.map((item) => (
+              <option value={item} key={item}>{item.replace("_", " ")}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Notes">
+          <textarea value={notes} onChange={(event) => setNotes(event.target.value)} rows={4} />
+        </Field>
         <button type="submit" disabled={updateLead.isPending || !lead.lead_id}>
           {updateLead.isPending ? <Loader2 className="spin" size={17} /> : <CheckCircle2 size={17} />}
           Save lead
         </button>
         <ErrorAlert error={updateLead.error} />
       </form>
+      <section className="email-review">
+        <div className="section-head">
+          <div>
+            <h2>Email review</h2>
+            <p>{leadEmails.data?.count ?? 0} emails on this lead</p>
+          </div>
+        </div>
+        {leadEmails.isLoading ? (
+          <div className="muted">Loading emails...</div>
+        ) : leadEmails.isError ? (
+          <ErrorAlert error={leadEmails.error} />
+        ) : (
+          <div className="email-review-list">
+            {(leadEmails.data?.emails ?? []).map((email) => (
+              <EmailReviewRow
+                key={email.email_id}
+                email={email}
+                onUpdate={(payload) => updateEmail.mutate({
+                  emailId: email.email_id,
+                  leadId: email.lead_id,
+                  payload,
+                })}
+                onDelete={() => deleteEmail.mutate({
+                  emailId: email.email_id,
+                  leadId: email.lead_id,
+                })}
+              />
+            ))}
+            {!leadEmails.data?.emails.length && (
+              <EmptyState title="No reviewed emails" body="Add an email manually or run enrichment for this lead." />
+            )}
+          </div>
+        )}
+        <form
+          className="add-email-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!lead.lead_id || !newEmail.trim()) return;
+            addEmail.mutate({
+              leadId: lead.lead_id,
+              payload: {
+                email: newEmail.trim(),
+                category: "unknown",
+                status: "new",
+              },
+            }, {
+              onSuccess: () => setNewEmail(""),
+            });
+          }}
+        >
+          <input
+            value={newEmail}
+            onChange={(event) => setNewEmail(event.target.value)}
+            placeholder="Add email"
+          />
+          <button type="submit" disabled={addEmail.isPending || !newEmail.trim()}>
+            Add
+          </button>
+        </form>
+        <ErrorAlert error={addEmail.error || updateEmail.error || deleteEmail.error} />
+      </section>
     </section>
   );
 }
@@ -965,13 +1154,29 @@ function LeadsPage() {
   const [jobId, setJobId] = useState("");
   const [hasEmail, setHasEmail] = useState("");
   const [hasWebsite, setHasWebsite] = useState("");
+  const [leadFlagFilter, setLeadFlagFilter] = useState("");
+  const [leadStatusFilter, setLeadStatusFilter] = useState("");
   const [selectedLead, setSelectedLead] = useState<Lead>();
+  const [pageSize, setPageSize] = useState<number | "all">(30);
+  const [page, setPage] = useState(1);
   const leads = useLeads({
     status: status || undefined,
     job_id: jobId || undefined,
     has_email: hasEmail === "" ? undefined : hasEmail === "true",
     has_website: hasWebsite === "" ? undefined : hasWebsite === "true",
+    lead_flag: leadFlagFilter || undefined,
+    lead_status: leadStatusFilter || undefined,
   });
+  const allLeads = leads.data?.leads ?? [];
+  const totalPages = pageSize === "all" ? 1 : Math.max(1, Math.ceil(allLeads.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const visibleLeads = pageSize === "all"
+    ? allLeads
+    : allLeads.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+
+  useEffect(() => {
+    setPage(1);
+  }, [status, jobId, hasEmail, hasWebsite, leadFlagFilter, leadStatusFilter, pageSize]);
 
   return (
     <>
@@ -1010,6 +1215,22 @@ function LeadsPage() {
             <option value="false">No website</option>
           </select>
         </Field>
+        <Field label="Flag">
+          <select value={leadFlagFilter} onChange={(event) => setLeadFlagFilter(event.target.value)}>
+            <option value="">Any flag</option>
+            {leadFlags.map((flag) => (
+              <option value={flag} key={flag}>{flag.replace("_", " ")}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Review">
+          <select value={leadStatusFilter} onChange={(event) => setLeadStatusFilter(event.target.value)}>
+            <option value="">Any review</option>
+            {leadStatuses.map((item) => (
+              <option value={item} key={item}>{item.replace("_", " ")}</option>
+            ))}
+          </select>
+        </Field>
         <button
           className="secondary"
           type="button"
@@ -1034,13 +1255,52 @@ function LeadsPage() {
               Export CSV
             </button>
           </div>
+          <div className="pagination-bar">
+            <div className="pagination-group">
+              <span className="label">Rows</span>
+              <select
+                value={pageSize}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setPageSize(value === "all" ? "all" : Number(value));
+                }}
+              >
+                <option value={10}>10</option>
+                <option value={30}>30</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+                <option value="all">All</option>
+              </select>
+            </div>
+            <div className="pagination-group">
+              <button
+                className="secondary"
+                type="button"
+                disabled={currentPage <= 1 || pageSize === "all"}
+                onClick={() => setPage((value) => Math.max(1, value - 1))}
+              >
+                Previous
+              </button>
+              <span className="page-count">
+                Page {currentPage} of {totalPages}
+              </span>
+              <button
+                className="secondary"
+                type="button"
+                disabled={currentPage >= totalPages || pageSize === "all"}
+                onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
+              >
+                Next
+              </button>
+            </div>
+          </div>
           {leads.isLoading ? (
             <div className="muted">Loading leads...</div>
           ) : leads.isError ? (
             <ErrorAlert error={leads.error} />
           ) : (
             <LeadsTable
-              leads={leads.data?.leads ?? []}
+              leads={visibleLeads}
               selectedLeadId={selectedLead?.lead_id}
               onSelectLead={setSelectedLead}
               showActions
@@ -1090,15 +1350,24 @@ function CurrentPage({ page }: { page: PageId }) {
 
 export function App() {
   const [page, setPage] = useState<PageId>("dashboard");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const health = useBackendHealth();
   const queryClient = useQueryClient();
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
       <aside className="sidebar">
+        <button
+          className="sidebar-toggle"
+          type="button"
+          title={sidebarCollapsed ? "Expand navigation" : "Collapse navigation"}
+          onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+        >
+          {sidebarCollapsed ? <Menu size={18} /> : <X size={18} />}
+        </button>
         <div className="brand">
           <div className="brand-mark">SC</div>
-          <div>
+          <div className="brand-text">
             <strong>Scraping Console</strong>
             <span>Lead operations</span>
           </div>
@@ -1111,10 +1380,11 @@ export function App() {
                 key={item.id}
                 type="button"
                 className={page === item.id ? "active" : ""}
+                title={item.label}
                 onClick={() => setPage(item.id)}
               >
                 <Icon size={18} />
-                {item.label}
+                <span>{item.label}</span>
               </button>
             );
           })}

@@ -46,8 +46,23 @@ export type Lead = {
   website?: string | null;
   emails?: string | null;
   status?: string | null;
+  lead_flag?: string | null;
+  lead_status?: string | null;
+  notes?: string | null;
   created_at?: string;
   updated_at?: string;
+};
+
+export type LeadEmail = {
+  email_id: number;
+  lead_id: number;
+  email: string;
+  category: string;
+  status: string;
+  is_primary: boolean | number;
+  notes?: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 export type GoogleMapsScrapeResponse = {
@@ -158,6 +173,8 @@ export type ListLeadsParams = {
   job_id?: string;
   has_email?: boolean;
   has_website?: boolean;
+  lead_flag?: string;
+  lead_status?: string;
 };
 
 export type ListLeadsResponse = {
@@ -169,8 +186,42 @@ export type UpdateLeadRequest = {
   website?: string;
   emails?: string | string[];
   status?: string;
+  lead_flag?: string;
+  lead_status?: string;
+  notes?: string;
 };
 
 export type UpdateLeadResponse = {
   lead: Lead;
+};
+
+export type ListLeadEmailsResponse = {
+  count: number;
+  emails: LeadEmail[];
+};
+
+export type AddLeadEmailRequest = {
+  email: string;
+  category?: string;
+  status?: string;
+  is_primary?: boolean;
+  notes?: string;
+};
+
+export type LeadEmailResponse = {
+  email: LeadEmail;
+};
+
+export type UpdateLeadEmailRequest = {
+  category?: string;
+  status?: string;
+  is_primary?: boolean;
+  notes?: string;
+};
+
+export type DeleteLeadEmailResponse = {
+  deleted: {
+    email_id: number;
+    lead_id: number;
+  };
 };

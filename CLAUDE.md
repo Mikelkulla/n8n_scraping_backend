@@ -21,7 +21,7 @@ Backend:
 Frontend:
 - Vite + React + TypeScript app in `frontend/`.
 - TanStack Query for API calls, mutations, polling, and cache refresh.
-- Operational UI for scraping, lead management, jobs, exports, dashboard metrics, and global data refresh.
+- Operational UI for scraping, lead management, jobs, exports, dashboard metrics, global data refresh, and collapsible sidebar navigation.
 
 Primary capabilities:
 1. Website email scraping: Selenium crawls a single website and returns email addresses directly.
@@ -471,6 +471,7 @@ Frontend hooks:
 
 Supports:
 - Filtering by status, job ID, has email, has website.
+- Client-side pagination with page sizes 10, 30, 50, 100, and All.
 - Quick `Needs enrichment` filter.
 - Row click to open detail panel.
 - Open website.
@@ -480,7 +481,7 @@ Supports:
 - The row action controls are always rendered for stable alignment: external-link icon for website, mail icon for email copy, phone icon for phone copy, copy icon for formatted lead copy. Website/email/phone actions are disabled when the row lacks the required value.
 - Edit website, emails, status through `PATCH /api/leads/<lead_id>`.
 - CSV export through `/api/leads/export`.
-- Table layout keeps Status/Actions visible by wrapping website URLs and email tokens while keeping phone numbers on one line.
+- Table layout keeps Status/Actions visible by wrapping website URLs and email tokens while keeping phone numbers on one line. The Actions column stays a normal table cell so row heights match wrapped content; its buttons sit in an inner flex row.
 
 ### Jobs Page
 
@@ -501,6 +502,10 @@ Shows:
 ### Global Refresh
 
 The top bar includes a Refresh button on every tab. It calls TanStack Query `invalidateQueries()` so active backend-backed UI data refetches without a full page reload.
+
+### Sidebar Layout
+
+The left navigation sidebar can collapse/expand through the small top-left icon. Collapsed mode keeps icon-only navigation visible and gives more horizontal space to data tables.
 
 ## Logging
 
@@ -527,4 +532,41 @@ The top bar includes a Refresh button on every tab. It calls TanStack Query `inv
 - `radius` is accepted by `/api/scrape/google-maps` but ignored by the current Google Places Text Search implementation.
 - Frontend is concentrated in `frontend/src/App.tsx`. If the UI grows further, split pages/components into separate files.
 - Clipboard features use `navigator.clipboard`, which works on localhost/secure contexts.
-- Manual lead editing currently supports only website, emails, and status.
+- Manual lead editing supports website, legacy emails string, scrape status, lead flag, lead review status, and notes.
+
+## Lead and Email Review System
+
+The app now has a lightweight review layer on top of raw scraped leads.
+
+Lead review fields added to `leads`:
+- `lead_flag`: `needs_review`, `good`, `bad`, `hot`.
+- `lead_status`: `new`, `reviewed`, `ready`, `contacted`, `do_not_contact`.
+- `notes`: manual review notes.
+
+Normalized email review table:
+- `lead_emails.email_id`
+- `lead_emails.lead_id`
+- `lead_emails.email`
+- `lead_emails.category`: `unknown`, `booking`, `info`, `sales`, `support`, `accounting`, `manager`.
+- `lead_emails.status`: `new`, `valid`, `invalid`, `do_not_use`.
+- `lead_emails.is_primary`
+- `lead_emails.notes`
+
+Existing comma-separated `leads.emails` data is backfilled into `lead_emails` during DB initialization. The old `leads.emails` field remains for compatibility and CSV export. When normalized email rows are added, updated, or deleted, `leads.emails` is synced from usable rows, excluding `invalid` and `do_not_use`.
+
+Additional endpoints:
+- `GET /api/leads/<lead_id>/emails`
+- `POST /api/leads/<lead_id>/emails`
+- `PATCH /api/lead-emails/<email_id>`
+- `DELETE /api/lead-emails/<email_id>`
+
+`GET /api/leads` also supports `lead_flag` and `lead_status` filters.
+
+Lead detail UI now supports:
+- Editing lead flag, review status, and notes.
+- Reviewing individual emails.
+- Setting email category/status.
+- Marking one primary email.
+- Adding manual emails.
+- Deleting bad emails.
+- Email review rows are vertically stacked in the narrow lead detail panel so long email addresses remain readable; controls appear below the email text.

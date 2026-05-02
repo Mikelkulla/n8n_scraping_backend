@@ -1,8 +1,13 @@
 import { downloadRequest, apiRequest } from "./httpClient";
 import type {
   ExportLeadsResponse,
+  AddLeadEmailRequest,
+  DeleteLeadEmailResponse,
+  LeadEmailResponse,
   ListLeadsParams,
   ListLeadsResponse,
+  ListLeadEmailsResponse,
+  UpdateLeadEmailRequest,
   UpdateLeadRequest,
   UpdateLeadResponse,
 } from "./types";
@@ -28,6 +33,30 @@ export function updateLead(leadId: number, payload: UpdateLeadRequest) {
   return apiRequest<UpdateLeadResponse>(`/leads/${leadId}`, {
     method: "PATCH",
     body: JSON.stringify(payload),
+  });
+}
+
+export function listLeadEmails(leadId: number) {
+  return apiRequest<ListLeadEmailsResponse>(`/leads/${leadId}/emails`);
+}
+
+export function addLeadEmail(leadId: number, payload: AddLeadEmailRequest) {
+  return apiRequest<LeadEmailResponse>(`/leads/${leadId}/emails`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateLeadEmail(emailId: number, payload: UpdateLeadEmailRequest) {
+  return apiRequest<LeadEmailResponse>(`/lead-emails/${emailId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteLeadEmail(emailId: number) {
+  return apiRequest<DeleteLeadEmailResponse>(`/lead-emails/${emailId}`, {
+    method: "DELETE",
   });
 }
 

@@ -1,12 +1,34 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { downloadLeadsCsv, exportLeadsJson, listLeads, updateLead } from "../api";
-import type { ListLeadsParams, UpdateLeadRequest } from "../api";
+import {
+  addLeadEmail,
+  deleteLeadEmail,
+  downloadLeadsCsv,
+  exportLeadsJson,
+  listLeadEmails,
+  listLeads,
+  updateLead,
+  updateLeadEmail,
+} from "../api";
+import type {
+  AddLeadEmailRequest,
+  ListLeadsParams,
+  UpdateLeadEmailRequest,
+  UpdateLeadRequest,
+} from "../api";
 import { queryKeys } from "./queryKeys";
 
 export function useLeads(params: ListLeadsParams = {}) {
   return useQuery({
     queryKey: queryKeys.leads(params),
     queryFn: () => listLeads(params),
+  });
+}
+
+export function useLeadEmails(leadId?: number) {
+  return useQuery({
+    queryKey: queryKeys.leadEmails(leadId ?? 0),
+    queryFn: () => listLeadEmails(leadId ?? 0),
+    enabled: Boolean(leadId),
   });
 }
 
@@ -24,6 +46,47 @@ export function useUpdateLead() {
     mutationFn: ({ leadId, payload }: { leadId: number; payload: UpdateLeadRequest }) =>
       updateLead(leadId, payload),
     onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["leads"] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.summary });
+    },
+  });
+}
+
+export function useAddLeadEmail() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ leadId, payload }: { leadId: number; payload: AddLeadEmailRequest }) =>
+      addLeadEmail(leadId, payload),
+    onSuccess: (_, variables) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.leadEmails(variables.leadId) });
+      void queryClient.invalidateQueries({ queryKey: ["leads"] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.summary });
+    },
+  });
+}
+
+export function useUpdateLeadEmail() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ emailId, leadId, payload }: { emailId: number; leadId: number; payload: UpdateLeadEmailRequest }) =>
+      updateLeadEmail(emailId, payload),
+    onSuccess: (_, variables) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.leadEmails(variables.leadId) });
+      void queryClient.invalidateQueries({ queryKey: ["leads"] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.summary });
+    },
+  });
+}
+
+export function useDeleteLeadEmail() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ emailId }: { emailId: number; leadId: number }) => deleteLeadEmail(emailId),
+    onSuccess: (_, variables) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.leadEmails(variables.leadId) });
       void queryClient.invalidateQueries({ queryKey: ["leads"] });
       void queryClient.invalidateQueries({ queryKey: queryKeys.summary });
     },
