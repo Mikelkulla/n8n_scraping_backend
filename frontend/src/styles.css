@@ -505,7 +505,7 @@ table {
 }
 
 .lead-table {
-  min-width: 1260px;
+  min-width: 1360px;
   table-layout: fixed;
 }
 
@@ -531,12 +531,12 @@ table {
 
 .lead-table th:nth-child(5),
 .lead-table td:nth-child(5) {
-  width: 18%;
+  width: 16%;
 }
 
 .lead-table th:nth-child(6),
 .lead-table td:nth-child(6) {
-  width: 8%;
+  width: 10%;
 }
 
 .lead-table th:nth-child(7),
@@ -546,6 +546,11 @@ table {
 
 .lead-table th:nth-child(8),
 .lead-table td:nth-child(8) {
+  width: 8%;
+}
+
+.lead-table th:nth-child(9),
+.lead-table td:nth-child(9) {
   width: 8%;
   min-width: 132px;
 }
@@ -638,6 +643,146 @@ td {
   border-radius: 999px;
   background: #f8faf7;
   padding: 7px 10px;
+  color: #344148;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.campaign-badge {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-height: 24px;
+  border-radius: 999px;
+  background: #d9edf1;
+  color: #17606a;
+  padding: 0 10px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.campaigns-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.7fr) minmax(420px, 1.3fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.campaign-list {
+  display: grid;
+  gap: 8px;
+}
+
+.campaign-list-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: 8px;
+  width: 100%;
+  border: 1px solid #e0e6e0;
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px;
+  color: #172026;
+  text-align: left;
+}
+
+.campaign-list-item.active,
+.campaign-list-item:hover {
+  border-color: #b9d3cd;
+  background: #f0f6f4;
+}
+
+.campaign-list-item span {
+  min-width: 0;
+}
+
+.campaign-list-item strong,
+.campaign-list-item small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.campaign-list-item small {
+  margin-top: 3px;
+  color: #69747a;
+}
+
+.campaign-create-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.campaign-create-form button,
+.campaign-create-form .alert,
+.campaign-create-form .detail-wide {
+  grid-column: 1 / -1;
+}
+
+.campaign-detail {
+  margin-top: 16px;
+}
+
+.stage-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.stage-counts span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  border: 1px solid #dfe4dc;
+  border-radius: 999px;
+  background: #f8faf7;
+  padding: 0 10px;
+  color: #49565d;
+  font-size: 0.84rem;
+}
+
+.campaign-toolbar {
+  display: grid;
+  grid-template-columns: 220px minmax(260px, 1fr);
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.campaign-leads-table {
+  min-width: 1120px;
+}
+
+.campaign-leads-table td select {
+  min-width: 150px;
+}
+
+.campaign-edit-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.context-text {
+  max-height: 120px;
+  overflow: auto;
+  margin: 4px 0 0;
+  color: #344148;
+  line-height: 1.45;
 }
 
 .empty-state {
@@ -981,6 +1126,10 @@ td {
   .job-filters,
   .jobs-layout,
   .leads-layout,
+  .campaigns-layout,
+  .campaign-create-form,
+  .campaign-toolbar,
+  .campaign-edit-grid,
   .form-row,
   .detail-grid,
   .edit-form {

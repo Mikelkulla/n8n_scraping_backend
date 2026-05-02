@@ -5,5 +5,8 @@ export const queryKeys = {
   jobProgress: (jobId: string) => ["job-progress", jobId] as const,
   leads: (params: Record<string, unknown>) => ["leads", params] as const,
   leadEmails: (leadId: number) => ["lead-emails", leadId] as const,
+  campaigns: ["campaigns"] as const,
+  campaign: (campaignId: number) => ["campaign", campaignId] as const,
+  campaignLeads: (campaignId: number, params: Record<string, unknown>) => ["campaign-leads", campaignId, params] as const,
   exportLeads: ["export-leads"] as const,
 };

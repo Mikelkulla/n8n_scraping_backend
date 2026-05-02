@@ -53,8 +53,17 @@ export type Lead = {
   summary_source_url?: string | null;
   summary_status?: "captured" | "empty" | "failed" | string | null;
   summary_updated_at?: string | null;
+  campaign_count?: number;
+  campaign_names?: string[];
+  campaign_memberships?: CampaignMembership[];
   created_at?: string;
   updated_at?: string;
+};
+
+export type CampaignMembership = {
+  campaign_id: number;
+  campaign_name: string;
+  stage: string;
 };
 
 export type LeadEmail = {
@@ -179,6 +188,8 @@ export type ListLeadsParams = {
   has_website?: boolean;
   lead_flag?: string;
   lead_status?: string;
+  business_type?: string;
+  search_location?: string;
 };
 
 export type ListLeadsResponse = {
@@ -229,4 +240,116 @@ export type DeleteLeadEmailResponse = {
     email_id: number;
     lead_id: number;
   };
+};
+
+export type CampaignStatus = "draft" | "active" | "paused" | "completed" | "archived" | string;
+
+export type Campaign = {
+  campaign_id: number;
+  name: string;
+  business_type?: string | null;
+  search_location?: string | null;
+  filters_json?: string | null;
+  status: CampaignStatus;
+  notes?: string | null;
+  total_leads: number;
+  review: number;
+  ready_for_email: number;
+  drafted: number;
+  approved: number;
+  contacted: number;
+  replied?: number;
+  closed?: number;
+  skipped?: number;
+  do_not_contact?: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreateCampaignRequest = {
+  name: string;
+  filters: ListLeadsParams;
+  notes?: string;
+};
+
+export type CampaignResponse = {
+  campaign: Campaign;
+};
+
+export type CreateCampaignResponse = CampaignResponse & {
+  added_leads: number;
+  skipped_existing: number;
+};
+
+export type ListCampaignsResponse = {
+  count: number;
+  campaigns: Campaign[];
+};
+
+export type CampaignLead = {
+  campaign_lead_id: number;
+  campaign_id: number;
+  lead_id: number;
+  stage: string;
+  priority?: string | null;
+  email_draft?: string | null;
+  final_email?: string | null;
+  campaign_notes?: string | null;
+  contacted_at?: string | null;
+  created_at: string;
+  updated_at: string;
+  execution_id?: number;
+  place_id?: string;
+  location?: string | null;
+  name?: string | null;
+  address?: string | null;
+  phone?: string | null;
+  website?: string | null;
+  emails?: string | null;
+  primary_email?: string | null;
+  lead_scrape_status?: string | null;
+  lead_flag?: string | null;
+  lead_status?: string | null;
+  notes?: string | null;
+  website_summary?: string | null;
+  summary_source_url?: string | null;
+  summary_status?: string | null;
+  summary_updated_at?: string | null;
+  job_id?: string;
+  campaign_name?: string;
+  business_type?: string | null;
+  search_location?: string | null;
+};
+
+export type ListCampaignLeadsParams = {
+  stage?: string;
+  lead_flag?: string;
+  lead_status?: string;
+  has_email?: boolean;
+  has_website?: boolean;
+  search?: string;
+};
+
+export type ListCampaignLeadsResponse = {
+  count: number;
+  leads: CampaignLead[];
+};
+
+export type UpdateCampaignRequest = {
+  name?: string;
+  status?: string;
+  notes?: string;
+};
+
+export type UpdateCampaignLeadRequest = {
+  stage?: string;
+  priority?: string;
+  email_draft?: string;
+  final_email?: string;
+  campaign_notes?: string;
+  contacted_at?: string;
+};
+
+export type CampaignLeadResponse = {
+  campaign_lead: CampaignLead;
 };
