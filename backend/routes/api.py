@@ -204,6 +204,62 @@ def get_progress(job_id):
         logging.error(f"Error fetching progress for job {job_id}: {e}")
         return jsonify({"error": str(e)}), 500
 
+
+@api_bp.route("/summary", methods=["GET"])
+@log_function_call
+def get_summary():
+    """Returns dashboard summary counts for leads and jobs."""
+    try:
+        with Database() as db:
+            summary = db.get_summary()
+
+        return jsonify(summary), 200
+
+    except Exception as e:
+        logging.error(f"Error fetching summary: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/jobs", methods=["GET"])
+@log_function_call
+def list_jobs():
+    """Lists recent job executions with optional filters.
+
+    Query Parameters:
+        status (str, optional): Exact job status.
+        step_id (str, optional): Exact step ID.
+        limit (int, optional): Max rows to return. Defaults to 50, capped at 200.
+
+    Returns:
+        200 JSON with count and jobs.
+        400 for invalid limit values.
+        500 on unexpected error.
+    """
+    try:
+        status = request.args.get("status")
+        step_id = request.args.get("step_id")
+        raw_limit = request.args.get("limit", "50")
+
+        try:
+            limit = int(raw_limit)
+        except ValueError:
+            return jsonify({"error": "limit must be an integer"}), 400
+
+        if limit < 1:
+            return jsonify({"error": "limit must be greater than 0"}), 400
+
+        limit = min(limit, 200)
+
+        with Database() as db:
+            jobs = db.list_job_executions(status=status, step_id=step_id, limit=limit)
+
+        return jsonify({"count": len(jobs), "jobs": jobs}), 200
+
+    except Exception as e:
+        logging.error(f"Error listing jobs: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @api_bp.route("/stop/<job_id>", methods=["POST"])
 @log_function_call
 def stop_scrape(job_id):
@@ -404,6 +460,200 @@ def scrape_leads_emails():
 
     except Exception as e:
         logging.error(f"Error starting leads email scrape: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+def _parse_bool_query(value):
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"true", "1", "yes"}:
+        return True
+    if normalized in {"false", "0", "no"}:
+        return False
+    raise ValueError("Expected boolean query value: true or false")
+
+
+@api_bp.route("/leads", methods=["GET"])
+@log_function_call
+def list_leads():
+    """Lists all stored leads with optional filters.
+
+    Query Parameters:
+        status (str, optional): Exact lead status, e.g. scraped, failed, skipped.
+        job_id (str, optional): Parent job UUID.
+        has_email (bool, optional): true for leads with email, false without.
+        has_website (bool, optional): true for leads with website, false without.
+
+    Returns:
+        200 JSON with count and leads.
+        400 if boolean filters are invalid.
+        500 on unexpected error.
+    """
+    try:
+        status = request.args.get("status")
+        job_id = request.args.get("job_id")
+        lead_flag = request.args.get("lead_flag")
+        lead_status = request.args.get("lead_status")
+        has_email = _parse_bool_query(request.args.get("has_email"))
+        has_website = _parse_bool_query(request.args.get("has_website"))
+
+        with Database() as db:
+            leads = db.list_leads(
+                status=status,
+                job_id=job_id,
+                lead_flag=lead_flag,
+                lead_status=lead_status,
+                has_email=has_email,
+                has_website=has_website
+            )
+
+        return jsonify({"count": len(leads), "leads": leads}), 200
+
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logging.error(f"Error listing leads: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/leads/<int:lead_id>", methods=["PATCH"])
+@log_function_call
+def patch_lead(lead_id):
+    """Updates manually editable lead fields.
+
+    Request JSON Body:
+        website (str, optional)
+        emails (str, optional)
+        status (str, optional)
+
+    Returns:
+        200 JSON with updated lead.
+        400 if no editable fields are provided.
+        404 if the lead does not exist.
+    """
+    try:
+        data = request.get_json() or {}
+        allowed_fields = {"website", "emails", "status", "lead_flag", "lead_status", "notes"}
+        update_data = {key: data[key] for key in allowed_fields if key in data}
+
+        if not update_data:
+            return jsonify({"error": "Provide at least one editable field: website, emails, status, lead_flag, lead_status, notes"}), 400
+
+        if "website" in update_data and update_data["website"]:
+            validated_url, url_error = validate_url(update_data["website"])
+            if url_error:
+                return jsonify({"error": url_error}), 400
+            update_data["website"] = validated_url
+
+        if "emails" in update_data and isinstance(update_data["emails"], list):
+            update_data["emails"] = ",".join(validate_emails(update_data["emails"]))
+        elif "emails" in update_data and isinstance(update_data["emails"], str):
+            raw_emails = [
+                email.strip()
+                for email in update_data["emails"].split(",")
+                if email.strip()
+            ]
+            update_data["emails"] = ",".join(validate_emails(raw_emails))
+
+        with Database() as db:
+            lead = db.update_lead_by_id(lead_id=lead_id, **update_data)
+
+        if not lead:
+            return jsonify({"error": f"Lead {lead_id} not found"}), 404
+
+        return jsonify({"lead": lead}), 200
+
+    except Exception as e:
+        logging.error(f"Error updating lead {lead_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/leads/<int:lead_id>/emails", methods=["GET"])
+@log_function_call
+def list_lead_emails(lead_id):
+    """Lists normalized email rows for a lead."""
+    try:
+        with Database() as db:
+            emails = db.list_lead_emails(lead_id)
+
+        return jsonify({"count": len(emails), "emails": emails}), 200
+    except Exception as e:
+        logging.error(f"Error listing emails for lead {lead_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/leads/<int:lead_id>/emails", methods=["POST"])
+@log_function_call
+def add_lead_email(lead_id):
+    """Adds a normalized email row to a lead."""
+    try:
+        data = request.get_json() or {}
+        email = data.get("email")
+        if not email or not isinstance(email, str):
+            return jsonify({"error": "Missing or invalid email"}), 400
+
+        valid_emails = validate_emails([email.strip()])
+        if not valid_emails:
+            return jsonify({"error": "Invalid email"}), 400
+
+        with Database() as db:
+            email_row = db.add_lead_email(
+                lead_id=lead_id,
+                email=valid_emails[0],
+                category=data.get("category", "unknown"),
+                status=data.get("status", "new"),
+                is_primary=bool(data.get("is_primary", False)),
+                notes=data.get("notes")
+            )
+
+        if not email_row:
+            return jsonify({"error": f"Lead {lead_id} not found"}), 404
+
+        return jsonify({"email": email_row}), 201
+    except Exception as e:
+        logging.error(f"Error adding email for lead {lead_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/lead-emails/<int:email_id>", methods=["PATCH"])
+@log_function_call
+def patch_lead_email(email_id):
+    """Updates category/status/primary/notes for a normalized email row."""
+    try:
+        data = request.get_json() or {}
+        allowed_fields = {"category", "status", "is_primary", "notes"}
+        update_data = {key: data[key] for key in allowed_fields if key in data}
+
+        if not update_data:
+            return jsonify({"error": "Provide at least one editable field: category, status, is_primary, notes"}), 400
+
+        with Database() as db:
+            email_row = db.update_lead_email(email_id=email_id, **update_data)
+
+        if not email_row:
+            return jsonify({"error": f"Email {email_id} not found"}), 404
+
+        return jsonify({"email": email_row}), 200
+    except Exception as e:
+        logging.error(f"Error updating email {email_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/lead-emails/<int:email_id>", methods=["DELETE"])
+@log_function_call
+def delete_lead_email(email_id):
+    """Deletes a normalized email row."""
+    try:
+        with Database() as db:
+            deleted = db.delete_lead_email(email_id)
+
+        if not deleted:
+            return jsonify({"error": f"Email {email_id} not found"}), 404
+
+        return jsonify({"deleted": deleted}), 200
+    except Exception as e:
+        logging.error(f"Error deleting email {email_id}: {e}")
         return jsonify({"error": str(e)}), 500
 
 

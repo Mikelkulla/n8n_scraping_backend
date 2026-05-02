@@ -3,6 +3,14 @@ import os
 # Add project root to sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+# Windows PowerShell often defaults to cp1252, which cannot encode some place
+# names returned by Google Places. Keep console logging from failing on Unicode.
+for stream in (sys.stdout, sys.stderr):
+    try:
+        stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 from flask import Flask, jsonify
 from backend.routes.api import api_bp
 from backend.app_settings import Config
