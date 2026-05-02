@@ -566,12 +566,6 @@ def _parse_optional_bool(value):
 def list_campaigns():
     """Lists campaigns with stage counts."""
     try:
-        if campaign_id:
-            try:
-                campaign_id = int(campaign_id)
-            except ValueError:
-                return jsonify({"error": "campaign_id must be an integer"}), 400
-
         with Database() as db:
             campaigns = db.list_campaigns()
         return jsonify({"count": len(campaigns), "campaigns": campaigns}), 200
@@ -662,11 +656,8 @@ def patch_campaign(campaign_id):
 def list_campaign_leads(campaign_id):
     """Lists campaign lead workflow rows joined to lead data."""
     try:
-        name_search = request.args.get("name")
-        campaign_id = request.args.get("campaign_id")
         has_email = _parse_bool_query(request.args.get("has_email"))
         has_website = _parse_bool_query(request.args.get("has_website"))
-        has_phone = _parse_bool_query(request.args.get("has_phone"))
 
         with Database() as db:
             campaign = db.get_campaign(campaign_id)
@@ -782,6 +773,7 @@ def list_leads():
         search_location = request.args.get("search_location")
         has_email = _parse_bool_query(request.args.get("has_email"))
         has_website = _parse_bool_query(request.args.get("has_website"))
+        has_phone = _parse_bool_query(request.args.get("has_phone"))
 
         with Database() as db:
             leads = db.list_leads(
