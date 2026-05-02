@@ -4,6 +4,8 @@ import type {
   CampaignResponse,
   CreateCampaignRequest,
   CreateCampaignResponse,
+  GenerateCampaignEmailsRequest,
+  GenerateCampaignEmailsResponse,
   ListCampaignLeadsParams,
   ListCampaignLeadsResponse,
   ListCampaignsResponse,
@@ -55,6 +57,19 @@ export function listCampaignLeads(campaignId: number, params: ListCampaignLeadsP
 export function updateCampaignLead(campaignLeadId: number, payload: UpdateCampaignLeadRequest) {
   return apiRequest<CampaignLeadResponse>(`/campaign-leads/${campaignLeadId}`, {
     method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function generateCampaignLeadEmail(campaignLeadId: number) {
+  return apiRequest<CampaignLeadResponse>(`/campaign-leads/${campaignLeadId}/generate-email`, {
+    method: "POST",
+  });
+}
+
+export function generateCampaignEmails(campaignId: number, payload: GenerateCampaignEmailsRequest = {}) {
+  return apiRequest<GenerateCampaignEmailsResponse>(`/campaigns/${campaignId}/generate-emails`, {
+    method: "POST",
     body: JSON.stringify(payload),
   });
 }

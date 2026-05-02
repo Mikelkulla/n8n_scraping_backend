@@ -6,7 +6,13 @@ import uuid
 from backend.scripts.scraping.scrape_for_email import scrape_emails, scrape_emails_with_summary
 from config.job_functions import write_progress, check_stop_signal
 from backend.scripts.google_api.google_places import call_google_places_api
-from backend.database import Database
+from backend.database import Database, EMAIL_CATEGORY_VALUES
+from backend.ai_email_service import (
+    EmailGenerationBlocked,
+    EmailGenerationError,
+    generate_email_draft,
+    validate_generation_target,
+)
 import logging
 from config.logging import log_function_call
 from config.utils import validate_emails, validate_url
@@ -561,6 +567,172 @@ def _parse_optional_bool(value):
     raise ValueError("Expected boolean value")
 
 
+def _validate_email_settings_payload(data):
+    allowed_providers = {"openai", "anthropic"}
+    update_data = {}
+
+    if "provider" in data:
+        provider = str(data["provider"]).strip().lower()
+        if provider not in allowed_providers:
+            raise ValueError("provider must be openai or anthropic")
+        update_data["provider"] = provider
+
+    for key in ["model", "system_prompt", "user_prompt"]:
+        if key in data:
+            value = str(data[key]).strip()
+            if not value:
+                raise ValueError(f"{key} cannot be empty")
+            update_data[key] = value
+
+    if not update_data:
+        raise ValueError("Provide at least one editable email setting")
+    return update_data
+
+
+def _validate_business_rule_payload(data):
+    return {
+        "business_description": str(data.get("business_description") or "").strip(),
+        "pain_point": str(data.get("pain_point") or "").strip(),
+        "offer_angle": str(data.get("offer_angle") or "").strip(),
+        "extra_instructions": str(data.get("extra_instructions") or "").strip(),
+    }
+
+
+@api_bp.route("/email-settings", methods=["GET"])
+@log_function_call
+def get_email_settings():
+    """Returns AI email drafting settings without exposing API keys."""
+    try:
+        with Database() as db:
+            settings = db.get_email_settings()
+        return jsonify({"settings": settings}), 200
+    except Exception as e:
+        logging.error(f"Error fetching email settings: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/email-settings", methods=["PATCH"])
+@log_function_call
+def patch_email_settings():
+    """Updates AI email drafting settings."""
+    try:
+        data = request.get_json() or {}
+        update_data = _validate_email_settings_payload(data)
+        with Database() as db:
+            settings = db.update_email_settings(**update_data)
+        return jsonify({"settings": settings}), 200
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logging.error(f"Error updating email settings: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/email-settings/business-types", methods=["GET"])
+@log_function_call
+def list_email_business_rules():
+    """Lists business-type personalization rules for email drafting."""
+    try:
+        with Database() as db:
+            rules = db.list_business_type_email_rules()
+        return jsonify({"count": len(rules), "rules": rules}), 200
+    except Exception as e:
+        logging.error(f"Error listing business type email rules: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/email-settings/business-types/<path:business_type>", methods=["PUT"])
+@log_function_call
+def put_email_business_rule(business_type):
+    """Creates or updates one business-type personalization rule."""
+    try:
+        normalized_business_type = str(business_type or "").strip()
+        if not normalized_business_type:
+            return jsonify({"error": "business_type is required"}), 400
+
+        data = request.get_json() or {}
+        with Database() as db:
+            rule = db.upsert_business_type_email_rule(
+                normalized_business_type,
+                **_validate_business_rule_payload(data),
+            )
+        return jsonify({"rule": rule}), 200
+    except Exception as e:
+        logging.error(f"Error saving business type email rule {business_type}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/email-category-rules", methods=["GET"])
+@log_function_call
+def list_email_category_rules():
+    """Lists exact local-part rules used to auto-categorize emails."""
+    try:
+        with Database() as db:
+            rules = db.list_email_category_rules()
+        return jsonify({
+            "count": len(rules),
+            "categories": sorted(EMAIL_CATEGORY_VALUES),
+            "rules": rules,
+        }), 200
+    except Exception as e:
+        logging.error(f"Error listing email category rules: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/email-category-rules/<path:pattern>", methods=["PUT"])
+@log_function_call
+def put_email_category_rule(pattern):
+    """Creates or updates one email category rule."""
+    try:
+        data = request.get_json() or {}
+        category = str(data.get("category") or "").strip()
+        is_active = data.get("is_active", True)
+
+        if category not in EMAIL_CATEGORY_VALUES or category == "unknown":
+            return jsonify({"error": "category must be a known non-unknown category"}), 400
+        if not isinstance(is_active, bool):
+            is_active = _parse_optional_bool(is_active)
+
+        with Database() as db:
+            rule = db.upsert_email_category_rule(
+                pattern=pattern,
+                category=category,
+                is_active=is_active,
+            )
+        return jsonify({"rule": rule}), 200
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logging.error(f"Error saving email category rule {pattern}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/lead-emails/unknown", methods=["GET"])
+@log_function_call
+def list_unknown_lead_email_local_parts():
+    """Lists unknown email local-parts that can be promoted into rules."""
+    try:
+        with Database() as db:
+            local_parts = db.list_unknown_email_local_parts()
+        return jsonify({"count": len(local_parts), "local_parts": local_parts}), 200
+    except Exception as e:
+        logging.error(f"Error listing unknown email local-parts: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/email-category-rules/apply", methods=["POST"])
+@log_function_call
+def apply_email_category_rules():
+    """Applies active category rules to currently unknown emails only."""
+    try:
+        with Database() as db:
+            result = db.apply_email_category_rules_to_unknowns()
+        return jsonify(result), 200
+    except Exception as e:
+        logging.error(f"Error applying email category rules: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @api_bp.route("/campaigns", methods=["GET"])
 @log_function_call
 def list_campaigns():
@@ -702,6 +874,95 @@ def patch_campaign_lead(campaign_lead_id):
         return jsonify({"campaign_lead": campaign_lead}), 200
     except Exception as e:
         logging.error(f"Error updating campaign lead {campaign_lead_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/campaign-leads/<int:campaign_lead_id>/generate-email", methods=["POST"])
+@log_function_call
+def generate_campaign_lead_email(campaign_lead_id):
+    """Generates and stores an AI email draft for one campaign lead."""
+    try:
+        with Database() as db:
+            lead = db.get_campaign_lead(campaign_lead_id)
+            validate_generation_target(lead)
+            settings = db.get_email_settings()
+            rule = db.get_business_type_email_rule(lead.get("business_type")) if lead.get("business_type") else None
+
+        draft = generate_email_draft(lead, settings, rule)
+
+        with Database() as db:
+            campaign_lead = db.store_generated_email_draft(campaign_lead_id, draft)
+
+        return jsonify({"campaign_lead": campaign_lead}), 200
+    except EmailGenerationBlocked as e:
+        return jsonify({"error": str(e)}), 400
+    except EmailGenerationError as e:
+        return jsonify({"error": str(e)}), 502
+    except Exception as e:
+        logging.error(f"Error generating email for campaign lead {campaign_lead_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/campaigns/<int:campaign_id>/generate-emails", methods=["POST"])
+@log_function_call
+def generate_campaign_emails(campaign_id):
+    """Generates AI email drafts for eligible leads in one campaign."""
+    try:
+        data = request.get_json() or {}
+        stage = data.get("stage")
+        search = data.get("search")
+        limit = int(data.get("limit") or 25)
+        limit = max(1, min(limit, 100))
+
+        generated = []
+        skipped = []
+        errors = []
+
+        with Database() as db:
+            campaign = db.get_campaign(campaign_id)
+            if not campaign:
+                return jsonify({"error": f"Campaign {campaign_id} not found"}), 404
+
+            settings = db.get_email_settings()
+            leads = db.list_campaign_leads(campaign_id=campaign_id, stage=stage, search=search)
+
+        rules_by_business_type = {}
+        with Database() as db:
+            for rule in db.list_business_type_email_rules():
+                rules_by_business_type[rule["business_type"]] = rule
+
+        for lead in leads[:limit]:
+            try:
+                validate_generation_target(lead)
+                rule = rules_by_business_type.get(lead.get("business_type"))
+                draft = generate_email_draft(lead, settings, rule)
+                with Database() as db:
+                    updated = db.store_generated_email_draft(lead["campaign_lead_id"], draft)
+                generated.append(updated)
+            except EmailGenerationBlocked as e:
+                skipped.append({
+                    "campaign_lead_id": lead.get("campaign_lead_id"),
+                    "reason": str(e),
+                })
+            except EmailGenerationError as e:
+                errors.append({
+                    "campaign_lead_id": lead.get("campaign_lead_id"),
+                    "error": str(e),
+                })
+
+        status_code = 207 if errors else 200
+        return jsonify({
+            "generated_count": len(generated),
+            "skipped_count": len(skipped),
+            "error_count": len(errors),
+            "generated": generated,
+            "skipped": skipped,
+            "errors": errors,
+        }), status_code
+    except ValueError:
+        return jsonify({"error": "limit must be a number"}), 400
+    except Exception as e:
+        logging.error(f"Error generating emails for campaign {campaign_id}: {e}")
         return jsonify({"error": str(e)}), 500
 
 

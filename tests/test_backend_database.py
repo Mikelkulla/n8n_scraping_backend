@@ -319,6 +319,126 @@ class TestDatabase:
             assert leads[0]["campaign_count"] == 1
             assert leads[0]["campaign_names"] == ["Dentists London May 2026"]
 
+    def test_email_settings_and_business_rules_persist(self, temp_db):
+        """Test AI email settings and business-type rules."""
+        db, _ = temp_db
+        with db as conn:
+            settings = conn.get_email_settings()
+            assert settings["provider"] == "openai"
+            assert settings["model"]
+            assert "system_prompt" in settings
+
+            updated = conn.update_email_settings(
+                provider="anthropic",
+                model="claude-3-5-sonnet-latest",
+                system_prompt="System",
+                user_prompt="User",
+            )
+            assert updated["provider"] == "anthropic"
+            assert updated["model"] == "claude-3-5-sonnet-latest"
+
+            rule = conn.upsert_business_type_email_rule(
+                "dentist",
+                business_description="a dental practice",
+                pain_point="manual patient intake",
+                offer_angle="automated qualification",
+                extra_instructions="keep it direct",
+            )
+            assert rule["business_type"] == "dentist"
+            assert rule["pain_point"] == "manual patient intake"
+            assert conn.list_business_type_email_rules()[0]["business_type"] == "dentist"
+
+    def test_store_generated_email_draft_does_not_overwrite_final_email(self, temp_db):
+        """Test generated drafts update draft/stage while preserving final email."""
+        db, _ = temp_db
+        with db as conn:
+            conn.insert_job_execution("job1", "google_maps_scrape", "dentist:London, UK", status="completed")
+            execution = conn.get_job_execution("job1", "google_maps_scrape")
+            conn.insert_lead(
+                execution["execution_id"],
+                "place1",
+                location="dentist:London, UK",
+                name="Good Dentist",
+                website="https://example.com",
+                emails="hello@example.com",
+            )
+            result = conn.create_campaign("Campaign", filters={"has_email": True})
+            campaign_lead = conn.list_campaign_leads(result["campaign"]["campaign_id"])[0]
+            conn.update_campaign_lead(
+                campaign_lead["campaign_lead_id"],
+                final_email="Approved final email",
+            )
+
+            updated = conn.store_generated_email_draft(
+                campaign_lead["campaign_lead_id"],
+                "Generated draft email",
+            )
+
+            assert updated["email_draft"] == "Generated draft email"
+            assert updated["final_email"] == "Approved final email"
+            assert updated["stage"] == "drafted"
+
+    def test_store_generated_email_keeps_blocked_stage(self, temp_db):
+        """Test generation storage does not move blocked stages."""
+        db, _ = temp_db
+        with db as conn:
+            conn.insert_job_execution("job1", "google_maps_scrape", "dentist:London, UK", status="completed")
+            execution = conn.get_job_execution("job1", "google_maps_scrape")
+            conn.insert_lead(
+                execution["execution_id"],
+                "place1",
+                location="dentist:London, UK",
+                name="Good Dentist",
+                emails="hello@example.com",
+            )
+            result = conn.create_campaign("Campaign", filters={"has_email": True})
+            campaign_lead = conn.list_campaign_leads(result["campaign"]["campaign_id"])[0]
+            conn.update_campaign_lead(campaign_lead["campaign_lead_id"], stage="approved")
+
+            updated = conn.store_generated_email_draft(campaign_lead["campaign_lead_id"], "Generated draft")
+
+            assert updated["email_draft"] == "Generated draft"
+            assert updated["stage"] == "approved"
+
+    def test_default_email_category_rules_classify_new_email_rows(self, temp_db):
+        """Test default local-part rules classify inserted lead emails."""
+        db, _ = temp_db
+        with db as conn:
+            conn.insert_job_execution("job1", "google_maps_scrape", "hotel:Tirana", status="completed")
+            execution = conn.get_job_execution("job1", "google_maps_scrape")
+            conn.insert_lead(execution["execution_id"], "place1", name="Hotel")
+            lead = conn.list_leads()[0]
+
+            conn.cursor.execute("""
+                INSERT INTO lead_emails (lead_id, email, category, status)
+                VALUES (?, 'finance@example.com', 'unknown', 'new')
+            """, (lead["lead_id"],))
+            conn.cursor.execute("SELECT category FROM lead_emails WHERE email = 'finance@example.com'")
+            assert conn.cursor.fetchone()["category"] == "finance"
+
+    def test_email_category_rules_can_be_added_and_applied_to_unknowns(self, temp_db):
+        """Test adding a rule and applying it to existing unknown emails only."""
+        db, _ = temp_db
+        with db as conn:
+            conn.insert_job_execution("job1", "google_maps_scrape", "hotel:Tirana", status="completed")
+            execution = conn.get_job_execution("job1", "google_maps_scrape")
+            conn.insert_lead(execution["execution_id"], "place1", name="Hotel")
+            lead = conn.list_leads()[0]
+
+            conn.cursor.execute("""
+                INSERT INTO lead_emails (lead_id, email, category, status)
+                VALUES (?, 'concierge@example.com', 'unknown', 'new')
+            """, (lead["lead_id"],))
+            assert conn.list_unknown_email_local_parts()[0]["local_part"] == "concierge"
+
+            rule = conn.upsert_email_category_rule("concierge", "reception")
+            assert rule["category"] == "reception"
+
+            result = conn.apply_email_category_rules_to_unknowns()
+            assert result["updated_count"] == 1
+            conn.cursor.execute("SELECT category FROM lead_emails WHERE email = 'concierge@example.com'")
+            assert conn.cursor.fetchone()["category"] == "reception"
+
     def test_context_manager_commit(self, temp_db):
         """Test that changes are committed when the with block exits without an exception."""
         db, db_path = temp_db

@@ -881,6 +881,29 @@ td {
   margin-top: 16px;
 }
 
+.copyable-field {
+  display: grid;
+  gap: 8px;
+}
+
+.copyable-field button {
+  justify-self: start;
+}
+
+.rule-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.email-rules-layout {
+  display: grid;
+  grid-template-columns: minmax(720px, 1fr) minmax(280px, 340px);
+  gap: 20px;
+  align-items: start;
+}
+
 .button-row {
   display: flex;
   flex-wrap: wrap;
@@ -938,6 +961,13 @@ td {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
+}
+
+.settings-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  align-items: end;
 }
 
 .filters {
@@ -1237,6 +1267,7 @@ td {
   .grid.two,
   .metrics-grid,
   .settings-grid,
+  .settings-form,
   .filters,
   .job-filters,
   .jobs-layout,
@@ -1245,6 +1276,7 @@ td {
   .campaign-create-form,
   .campaign-toolbar,
   .campaign-edit-grid,
+  .email-rules-layout,
   .form-row,
   .detail-grid,
   .edit-form {

@@ -15,6 +15,8 @@ class Config:
     be overridden by environment variables.
     """
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", None)
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", None)
+    ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", None)
 
     BASE_DIR = os.path.abspath(os.path.dirname(__file__))               # Base dir of the project (backend)
     ROOT_DIR = os.path.abspath(os.path.join(BASE_DIR, "..")) # , ".."   # Project root dir (n8n_scraping_backend)

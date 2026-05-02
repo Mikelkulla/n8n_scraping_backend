@@ -6,6 +6,82 @@ import json
 from backend.app_settings import Config
 from config.logging import log_all_methods
 
+DEFAULT_EMAIL_SYSTEM_PROMPT = """You write concise, professional outreach email drafts for manual review.
+Use only the supplied lead, campaign, website context, and business-type rule.
+Do not invent claims, metrics, client names, or details that are not provided.
+Avoid spammy wording, pressure tactics, and exaggerated promises.
+Return only the email body."""
+
+DEFAULT_EMAIL_USER_PROMPT = """Write a personalized outreach email for this lead.
+
+Template:
+Hi [Name],
+
+I saw you're [specific description about their business].
+
+Usually companies at this stage struggle with [very specific problem].
+
+I've built systems that:
+
+* Automatically qualify leads by asking targeted questions and tagging them in Airtable/CRM based on their responses
+* Automate business workflows using Google Apps Script to connect tools, streamline data processing, and reduce manual tasks across operations
+
+Looking at your setup, I already see a couple of areas where automation could save serious time.
+
+If you're open to it, we can jump on a quick 15-minute call and I'll walk you through exactly what I'd improve and how it would work for your case.
+
+Looking forward!
+
+Prof. MSc. Mikel Kulla"""
+
+DEFAULT_EMAIL_SETTINGS = {
+    "ai_email_provider": "openai",
+    "ai_email_model": "gpt-4o-mini",
+    "ai_email_system_prompt": DEFAULT_EMAIL_SYSTEM_PROMPT,
+    "ai_email_user_prompt": DEFAULT_EMAIL_USER_PROMPT,
+}
+
+EMAIL_CATEGORY_VALUES = {
+    "unknown",
+    "booking",
+    "info",
+    "sales",
+    "support",
+    "accounting",
+    "finance",
+    "events",
+    "hr",
+    "marketing",
+    "manager",
+    "reception",
+}
+
+DEFAULT_EMAIL_CATEGORY_RULES = [
+    ("info", "info"),
+    ("sales", "sales"),
+    ("support", "support"),
+    ("accounting", "accounting"),
+    ("accounts", "accounting"),
+    ("finance", "finance"),
+    ("billing", "finance"),
+    ("event", "events"),
+    ("events", "events"),
+    ("booking", "booking"),
+    ("bookings", "booking"),
+    ("reservation", "booking"),
+    ("reservations", "booking"),
+    ("reserve", "booking"),
+    ("manager", "manager"),
+    ("management", "manager"),
+    ("reception", "reception"),
+    ("frontdesk", "reception"),
+    ("front-desk", "reception"),
+    ("hr", "hr"),
+    ("jobs", "hr"),
+    ("careers", "hr"),
+    ("marketing", "marketing"),
+]
+
 @log_all_methods
 class Database:
     """Manages the application's SQLite database connection and operations.
@@ -130,6 +206,52 @@ class Database:
             """)
 
             cursor.execute("""
+                CREATE TABLE IF NOT EXISTS email_category_rules (
+                    rule_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    pattern TEXT NOT NULL,
+                    match_type TEXT NOT NULL DEFAULT 'local_part_exact',
+                    category TEXT NOT NULL,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(pattern, match_type)
+                )
+            """)
+
+            for pattern, category in DEFAULT_EMAIL_CATEGORY_RULES:
+                cursor.execute("""
+                    INSERT OR IGNORE INTO email_category_rules (
+                        pattern, match_type, category, is_active, updated_at
+                    ) VALUES (?, 'local_part_exact', ?, TRUE, CURRENT_TIMESTAMP)
+                """, (pattern, category))
+
+            cursor.execute("""
+                CREATE TRIGGER IF NOT EXISTS classify_lead_email_after_insert
+                AFTER INSERT ON lead_emails
+                WHEN NEW.category IS NULL OR NEW.category = '' OR NEW.category = 'unknown'
+                BEGIN
+                    UPDATE lead_emails
+                    SET category = (
+                        SELECT category
+                        FROM email_category_rules
+                        WHERE is_active = TRUE
+                          AND match_type = 'local_part_exact'
+                          AND pattern = LOWER(SUBSTR(NEW.email, 1, INSTR(NEW.email, '@') - 1))
+                        LIMIT 1
+                    ),
+                    updated_at = CURRENT_TIMESTAMP
+                    WHERE email_id = NEW.email_id
+                      AND EXISTS (
+                        SELECT 1
+                        FROM email_category_rules
+                        WHERE is_active = TRUE
+                          AND match_type = 'local_part_exact'
+                          AND pattern = LOWER(SUBSTR(NEW.email, 1, INSTR(NEW.email, '@') - 1))
+                      );
+                END
+            """)
+
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS campaigns (
                     campaign_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL,
@@ -161,6 +283,32 @@ class Database:
                     FOREIGN KEY (lead_id) REFERENCES leads(lead_id) ON DELETE CASCADE
                 )
             """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS business_type_email_rules (
+                    business_type TEXT PRIMARY KEY,
+                    business_description TEXT,
+                    pain_point TEXT,
+                    offer_angle TEXT,
+                    extra_instructions TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            for key, value in DEFAULT_EMAIL_SETTINGS.items():
+                cursor.execute("""
+                    INSERT OR IGNORE INTO app_settings (key, value, updated_at)
+                    VALUES (?, ?, CURRENT_TIMESTAMP)
+                """, (key, value))
 
             cursor.execute("""
                 SELECT lead_id, emails
@@ -928,6 +1076,202 @@ class Database:
         )
         leads = self.list_campaign_leads(row["campaign_id"])
         return next((lead for lead in leads if lead["campaign_lead_id"] == campaign_lead_id), None)
+
+    def get_campaign_lead(self, campaign_lead_id):
+        """Gets one campaign lead joined to campaign and base lead context."""
+        self.cursor.execute("SELECT campaign_id FROM campaign_leads WHERE campaign_lead_id = ?", (campaign_lead_id,))
+        row = self.cursor.fetchone()
+        if not row:
+            return None
+        leads = self.list_campaign_leads(row["campaign_id"])
+        return next((lead for lead in leads if lead["campaign_lead_id"] == campaign_lead_id), None)
+
+    def get_email_settings(self):
+        """Returns AI email settings without exposing provider API keys."""
+        self.cursor.execute("SELECT key, value FROM app_settings")
+        rows = self.cursor.fetchall()
+        settings = dict(DEFAULT_EMAIL_SETTINGS)
+        settings.update({row["key"]: row["value"] for row in rows})
+
+        provider = settings.get("ai_email_provider") or DEFAULT_EMAIL_SETTINGS["ai_email_provider"]
+        return {
+            "provider": provider,
+            "model": settings.get("ai_email_model") or DEFAULT_EMAIL_SETTINGS["ai_email_model"],
+            "system_prompt": settings.get("ai_email_system_prompt") or DEFAULT_EMAIL_SYSTEM_PROMPT,
+            "user_prompt": settings.get("ai_email_user_prompt") or DEFAULT_EMAIL_USER_PROMPT,
+            "api_key_configured": self._is_ai_provider_key_configured(provider),
+        }
+
+    def update_email_settings(self, provider=None, model=None, system_prompt=None, user_prompt=None):
+        """Updates AI email settings."""
+        updates = {}
+        if provider is not None:
+            updates["ai_email_provider"] = provider
+        if model is not None:
+            updates["ai_email_model"] = model
+        if system_prompt is not None:
+            updates["ai_email_system_prompt"] = system_prompt
+        if user_prompt is not None:
+            updates["ai_email_user_prompt"] = user_prompt
+
+        for key, value in updates.items():
+            self.cursor.execute("""
+                INSERT INTO app_settings (key, value, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (key, value))
+        return self.get_email_settings()
+
+    def _is_ai_provider_key_configured(self, provider):
+        if provider == "openai":
+            return bool(Config.OPENAI_API_KEY)
+        if provider == "anthropic":
+            return bool(Config.ANTHROPIC_API_KEY)
+        return False
+
+    def list_business_type_email_rules(self):
+        """Lists configured email personalization rules by business type."""
+        self.cursor.execute("""
+            SELECT business_type, business_description, pain_point, offer_angle,
+                   extra_instructions, created_at, updated_at
+            FROM business_type_email_rules
+            ORDER BY business_type COLLATE NOCASE
+        """)
+        rows = self.cursor.fetchall()
+        return [dict(row) for row in rows] if rows else []
+
+    def get_business_type_email_rule(self, business_type):
+        """Gets one business-type email rule."""
+        self.cursor.execute("""
+            SELECT business_type, business_description, pain_point, offer_angle,
+                   extra_instructions, created_at, updated_at
+            FROM business_type_email_rules
+            WHERE business_type = ?
+        """, (business_type,))
+        row = self.cursor.fetchone()
+        return dict(row) if row else None
+
+    def upsert_business_type_email_rule(self, business_type, business_description=None, pain_point=None, offer_angle=None, extra_instructions=None):
+        """Creates or updates a business-type email personalization rule."""
+        self.cursor.execute("""
+            INSERT INTO business_type_email_rules (
+                business_type, business_description, pain_point, offer_angle,
+                extra_instructions, updated_at
+            ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(business_type) DO UPDATE SET
+                business_description = excluded.business_description,
+                pain_point = excluded.pain_point,
+                offer_angle = excluded.offer_angle,
+                extra_instructions = excluded.extra_instructions,
+                updated_at = CURRENT_TIMESTAMP
+        """, (business_type, business_description, pain_point, offer_angle, extra_instructions))
+        return self.get_business_type_email_rule(business_type)
+
+    def store_generated_email_draft(self, campaign_lead_id, email_draft):
+        """Stores an AI-generated draft without overwriting the final email."""
+        lead = self.get_campaign_lead(campaign_lead_id)
+        if not lead:
+            return None
+
+        blocked_stages = {"approved", "contacted", "replied", "closed", "skipped", "do_not_contact"}
+        next_stage = lead.get("stage") if lead.get("stage") in blocked_stages else "drafted"
+        return self.update_campaign_lead(
+            campaign_lead_id=campaign_lead_id,
+            email_draft=email_draft,
+            stage=next_stage,
+        )
+
+    def _normalize_email_rule_pattern(self, pattern):
+        return str(pattern or "").strip().lower()
+
+    def list_email_category_rules(self):
+        """Lists local-part email category rules."""
+        self.cursor.execute("""
+            SELECT rule_id, pattern, match_type, category, is_active, created_at, updated_at
+            FROM email_category_rules
+            ORDER BY pattern COLLATE NOCASE
+        """)
+        rows = self.cursor.fetchall()
+        return [dict(row) for row in rows] if rows else []
+
+    def get_email_category_rule(self, pattern, match_type="local_part_exact"):
+        """Gets one email category rule."""
+        normalized_pattern = self._normalize_email_rule_pattern(pattern)
+        self.cursor.execute("""
+            SELECT rule_id, pattern, match_type, category, is_active, created_at, updated_at
+            FROM email_category_rules
+            WHERE pattern = ? AND match_type = ?
+        """, (normalized_pattern, match_type))
+        row = self.cursor.fetchone()
+        return dict(row) if row else None
+
+    def upsert_email_category_rule(self, pattern, category, match_type="local_part_exact", is_active=True):
+        """Creates or updates a local-part email category rule."""
+        normalized_pattern = self._normalize_email_rule_pattern(pattern)
+        if not normalized_pattern:
+            raise ValueError("pattern is required")
+        if match_type != "local_part_exact":
+            raise ValueError("Only local_part_exact rules are supported")
+        if category not in EMAIL_CATEGORY_VALUES or category == "unknown":
+            raise ValueError("category must be a known non-unknown category")
+
+        self.cursor.execute("""
+            INSERT INTO email_category_rules (
+                pattern, match_type, category, is_active, updated_at
+            ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(pattern, match_type) DO UPDATE SET
+                category = excluded.category,
+                is_active = excluded.is_active,
+                updated_at = CURRENT_TIMESTAMP
+        """, (normalized_pattern, match_type, category, bool(is_active)))
+        return self.get_email_category_rule(normalized_pattern, match_type)
+
+    def list_unknown_email_local_parts(self):
+        """Lists unknown email local-parts with examples and counts."""
+        self.cursor.execute("""
+            SELECT
+                LOWER(SUBSTR(email, 1, INSTR(email, '@') - 1)) AS local_part,
+                COUNT(*) AS count,
+                MIN(email) AS example_email
+            FROM lead_emails
+            WHERE category = 'unknown'
+              AND email IS NOT NULL
+              AND INSTR(email, '@') > 1
+            GROUP BY LOWER(SUBSTR(email, 1, INSTR(email, '@') - 1))
+            ORDER BY count DESC, local_part COLLATE NOCASE
+        """)
+        rows = self.cursor.fetchall()
+        return [dict(row) for row in rows] if rows else []
+
+    def apply_email_category_rules_to_unknowns(self):
+        """Applies active rules to currently unknown email rows only."""
+        self.cursor.execute("""
+            UPDATE lead_emails
+            SET category = (
+                SELECT category
+                FROM email_category_rules
+                WHERE is_active = TRUE
+                  AND match_type = 'local_part_exact'
+                  AND pattern = LOWER(SUBSTR(lead_emails.email, 1, INSTR(lead_emails.email, '@') - 1))
+                LIMIT 1
+            ),
+            updated_at = CURRENT_TIMESTAMP
+            WHERE category = 'unknown'
+              AND EXISTS (
+                SELECT 1
+                FROM email_category_rules
+                WHERE is_active = TRUE
+                  AND match_type = 'local_part_exact'
+                  AND pattern = LOWER(SUBSTR(lead_emails.email, 1, INSTR(lead_emails.email, '@') - 1))
+              )
+        """)
+        updated_count = self.cursor.rowcount
+        return {
+            "updated_count": updated_count,
+            "unknown_local_parts": self.list_unknown_email_local_parts(),
+        }
 
     def insert_lead(self, execution_id, place_id, location=None, name=None, address=None, phone=None, website=None, emails=None):
         """Inserts a new lead record into the database.
