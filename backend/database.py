@@ -515,7 +515,7 @@ class Database:
 
         return leads
 
-    def _append_lead_filters(self, query, params, status=None, job_id=None, has_email=None, has_website=None, lead_flag=None, lead_status=None, business_type=None, search_location=None):
+    def _append_lead_filters(self, query, params, status=None, job_id=None, has_email=None, has_website=None, has_phone=None, lead_flag=None, lead_status=None, business_type=None, search_location=None):
         if status:
             query += " AND l.status = ?"
             params.append(status)
@@ -550,9 +550,14 @@ class Database:
         elif has_website is False:
             query += " AND (l.website IS NULL OR TRIM(l.website) = '')"
 
+        if has_phone is True:
+            query += " AND l.phone IS NOT NULL AND TRIM(l.phone) != ''"
+        elif has_phone is False:
+            query += " AND (l.phone IS NULL OR TRIM(l.phone) = '')"
+
         return query
 
-    def list_leads(self, status=None, job_id=None, has_email=None, has_website=None, lead_flag=None, lead_status=None, business_type=None, search_location=None):
+    def list_leads(self, status=None, job_id=None, has_email=None, has_website=None, has_phone=None, lead_flag=None, lead_status=None, business_type=None, search_location=None):
         """Retrieves leads for UI listing with optional filters.
 
         Args:
@@ -604,6 +609,7 @@ class Database:
                 job_id=job_id,
                 has_email=has_email,
                 has_website=has_website,
+                has_phone=has_phone,
                 lead_flag=lead_flag,
                 lead_status=lead_status,
                 business_type=business_type,
@@ -636,6 +642,78 @@ class Database:
 
         return None, None
 
+    def list_lead_filter_options(self):
+        """Returns distinct business type and search location values parsed from leads."""
+        try:
+            self.cursor.execute("""
+                SELECT location
+                FROM leads
+                WHERE location IS NOT NULL AND TRIM(location) != ''
+            """)
+            business_type_counts = {}
+            search_location_counts = {}
+            pair_counts = {}
+
+            for row in self.cursor.fetchall():
+                location = row["location"]
+                if not isinstance(location, str):
+                    continue
+
+                business_type = None
+                search_location = None
+                if ":" in location:
+                    business_type, search_location = location.split(":", 1)
+                    business_type = business_type.strip()
+                    search_location = search_location.strip()
+                else:
+                    search_location = location.strip()
+
+                if business_type == "":
+                    business_type = None
+                if search_location == "":
+                    search_location = None
+
+                if business_type:
+                    business_type_counts[business_type] = business_type_counts.get(business_type, 0) + 1
+                if search_location:
+                    search_location_counts[search_location] = search_location_counts.get(search_location, 0) + 1
+                if business_type and search_location:
+                    pair_key = (business_type, search_location)
+                    pair_counts[pair_key] = pair_counts.get(pair_key, 0) + 1
+
+            business_types = [
+                {"value": value, "count": count}
+                for value, count in business_type_counts.items()
+            ]
+            search_locations = [
+                {"value": value, "count": count}
+                for value, count in search_location_counts.items()
+            ]
+            pairs = [
+                {
+                    "business_type": business_type,
+                    "search_location": search_location,
+                    "count": count,
+                }
+                for (business_type, search_location), count in pair_counts.items()
+            ]
+
+            return {
+                "business_types": sorted(business_types, key=lambda item: item["value"].lower()),
+                "search_locations": sorted(search_locations, key=lambda item: item["value"].lower()),
+                "pairs": sorted(
+                    pairs,
+                    key=lambda item: (item["business_type"].lower(), item["search_location"].lower()),
+                ),
+            }
+        except sqlite3.Error as e:
+            logging.error(f"Failed to list lead filter options: {e}")
+            return {
+                "business_types": [],
+                "search_locations": [],
+                "pairs": [],
+            }
+
     def create_campaign(self, name, filters=None, notes=None):
         """Creates a campaign from current matching leads."""
         filters = filters or {}
@@ -644,6 +722,7 @@ class Database:
             job_id=filters.get("job_id"),
             has_email=filters.get("has_email"),
             has_website=filters.get("has_website"),
+            has_phone=filters.get("has_phone"),
             lead_flag=filters.get("lead_flag"),
             lead_status=filters.get("lead_status"),
             business_type=filters.get("business_type"),

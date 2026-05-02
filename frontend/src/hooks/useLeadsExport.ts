@@ -4,6 +4,7 @@ import {
   deleteLeadEmail,
   downloadLeadsCsv,
   exportLeadsJson,
+  listLeadFilterOptions,
   listLeadEmails,
   listLeads,
   updateLead,
@@ -21,6 +22,13 @@ export function useLeads(params: ListLeadsParams = {}) {
   return useQuery({
     queryKey: queryKeys.leads(params),
     queryFn: () => listLeads(params),
+  });
+}
+
+export function useLeadFilterOptions() {
+  return useQuery({
+    queryKey: queryKeys.leadFilterOptions,
+    queryFn: listLeadFilterOptions,
   });
 }
 

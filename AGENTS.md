@@ -238,7 +238,8 @@ All API endpoints are mounted under `/api`, except Flask root health check `/`.
 | `POST` | `/api/scrape/leads-emails` | Start async email and website context enrichment for stored leads | Returns `202` with `job_id`; poll `/api/progress/<job_id>` |
 | `GET` | `/api/progress/<job_id>` | Get job progress/status | Checks known step IDs |
 | `POST` | `/api/stop/<job_id>` | Stop a running/stoppable job | Most useful for `leads_email_scrape` |
-| `GET` | `/api/leads` | List all leads with filters | Filters: `status`, `job_id`, `has_email=true/false`, `has_website=true/false` |
+| `GET` | `/api/leads` | List all leads with filters | Filters: `status`, `job_id`, `has_email=true/false`, `has_website=true/false`, `has_phone=true/false`, `business_type`, `search_location` |
+| `GET` | `/api/leads/filter-options` | List distinct scraped campaign filter options | Parses `business_type` and `search_location` dropdown values from existing `leads.location` values |
 | `PATCH` | `/api/leads/<lead_id>` | Manually edit lead fields | Editable: `website`, `emails`, `status`; validates website and emails |
 | `GET` | `/api/leads/export` | Export contact-ready leads | Default CSV; `?format=json` for JSON; only `status='scraped'` with phone or email |
 | `GET` | `/api/campaigns` | List campaigns with stage counts | Campaign list page |
@@ -362,6 +363,7 @@ Filters:
 - `job_id`
 - `has_email=true|false`
 - `has_website=true|false`
+- `has_phone=true|false`
 - `lead_flag`
 - `lead_status`
 - `business_type`
@@ -533,6 +535,8 @@ Frontend hooks:
 
 Supports:
 - Filtering by status, job ID, has email, has website.
+- Filtering by scrape status, job ID, has email, has website, has phone, lead flag, and lead review status from the filter panel.
+- The leads table header also has client-side UI filters: Name search in the Name column, Business type and Location dropdowns in the Location column, and Campaign dropdown in the Campaign column. These header filters operate on the currently loaded lead list rather than adding backend query parameters.
 - Client-side pagination with page sizes 10, 30, 50, 100, and All.
 - Quick `Needs enrichment` filter.
 - Row click expands/collapses lead details directly below the selected row; there is no persistent empty side panel.
@@ -642,8 +646,10 @@ Lead detail UI now supports:
 Campaigns are a workflow layer over existing leads. Lead records remain the source of truth for business/contact data, and campaign stages do not overwrite base lead status.
 
 Current behavior:
-- Campaigns are created from filters matching `/api/leads`, including scrape status, email/website presence, lead flag, lead review status, business type, and search location.
+- Campaigns are created from filters matching `/api/leads`, including scrape status, email/website/phone presence, lead flag, lead review status, business type, and search location.
+- Campaign creation uses live dropdowns for business type and search location from `/api/leads/filter-options`, parsed from existing scraped `leads.location` values like `dentist:London, UK`. The endpoint returns distinct business type counts, distinct location counts, and business type/location pair counts. The frontend uses those pair counts to make the two dropdowns dependent: selecting a business type narrows locations to only locations scraped for that type, selecting a location narrows business types to only types scraped there, and option labels show counts.
 - Campaign creation stores the filters JSON and links matching leads in `campaign_leads` with initial stage `review`.
 - Leads can belong to multiple campaigns; `/api/leads` includes `campaign_count`, `campaign_names`, and detailed `campaign_memberships`.
 - The Leads tab shows a Campaign column and expanded lead details list campaign memberships.
 - The Campaigns tab lists campaigns, creates campaigns, opens campaign detail, filters campaign leads by stage/search, updates stage and priority inline, edits campaign notes/email draft/final email, marks leads contacted, and exports campaign CSV.
+- Campaign detail stage counts are interactive buttons. Selecting a stage button filters the campaign lead table to that exact stage; selecting `All` shows every campaign lead. When a lead is moved from one stage to another, it should disappear from the previous active stage view after the campaign lead query refreshes.

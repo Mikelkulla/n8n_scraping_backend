@@ -186,6 +186,7 @@ export type ListLeadsParams = {
   job_id?: string;
   has_email?: boolean;
   has_website?: boolean;
+  has_phone?: boolean;
   lead_flag?: string;
   lead_status?: string;
   business_type?: string;
@@ -195,6 +196,22 @@ export type ListLeadsParams = {
 export type ListLeadsResponse = {
   count: number;
   leads: Lead[];
+};
+
+export type LeadFilterOptionsResponse = {
+  business_types: Array<{
+    value: string;
+    count: number;
+  }>;
+  search_locations: Array<{
+    value: string;
+    count: number;
+  }>;
+  pairs: Array<{
+    business_type: string;
+    search_location: string;
+    count: number;
+  }>;
 };
 
 export type UpdateLeadRequest = {

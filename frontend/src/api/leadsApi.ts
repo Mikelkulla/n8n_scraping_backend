@@ -4,6 +4,7 @@ import type {
   AddLeadEmailRequest,
   DeleteLeadEmailResponse,
   LeadEmailResponse,
+  LeadFilterOptionsResponse,
   ListLeadsParams,
   ListLeadsResponse,
   ListLeadEmailsResponse,
@@ -27,6 +28,10 @@ function toQueryString(params: ListLeadsParams = {}) {
 
 export function listLeads(params: ListLeadsParams = {}) {
   return apiRequest<ListLeadsResponse>(`/leads${toQueryString(params)}`);
+}
+
+export function listLeadFilterOptions() {
+  return apiRequest<LeadFilterOptionsResponse>("/leads/filter-options");
 }
 
 export function updateLead(leadId: number, payload: UpdateLeadRequest) {
