@@ -3,7 +3,7 @@ import csv
 import io
 import threading
 import uuid
-from backend.scripts.scraping.scrape_for_email import scrape_emails
+from backend.scripts.scraping.scrape_for_email import scrape_emails, scrape_emails_with_summary
 from config.job_functions import write_progress, check_stop_signal
 from backend.scripts.google_api.google_places import call_google_places_api
 from backend.database import Database
@@ -15,6 +15,65 @@ api_bp = Blueprint("api", __name__)
 
 # Dictionary to track active scraping threads
 active_jobs = {}
+
+def _scrape_and_store_lead_enrichment(lead, max_pages, use_tor, headless):
+    """Scrapes one lead website and stores emails plus website summary context."""
+    lead_id = lead.get("lead_id", "unknown")
+    place_id = lead.get("place_id")
+    execution_id = lead.get("execution_id")
+    website = lead.get("website")
+
+    if not website:
+        logging.warning(f"Lead {lead_id} has no website - skipping.")
+        with Database() as db:
+            db.update_lead(
+                place_id=place_id,
+                execution_id=execution_id,
+                status="skipped",
+                summary_status="empty",
+            )
+        return
+
+    validated_url, url_error = validate_url(website)
+    if url_error:
+        logging.warning(f"Lead {lead_id} has invalid URL ({website}): {url_error}")
+        with Database() as db:
+            db.update_lead(
+                place_id=place_id,
+                execution_id=execution_id,
+                status="failed",
+                summary_status="failed",
+            )
+        return
+
+    sub_job_id = str(uuid.uuid4())
+    logging.info(f"Scraping emails and website context for lead {lead_id} ({validated_url})")
+    result = scrape_emails_with_summary(
+        sub_job_id,
+        "email_scrape",
+        validated_url,
+        max_pages=max_pages,
+        use_tor=use_tor,
+        headless=headless,
+        sitemap_limit=10
+    )
+    valid_emails = validate_emails(result.get("emails", []))
+    emails_str = ",".join(valid_emails) if valid_emails else None
+    summary_status = result.get("summary_status") or "empty"
+
+    with Database() as db:
+        db.update_lead(
+            place_id=place_id,
+            execution_id=execution_id,
+            emails=emails_str,
+            status="scraped",
+            website_summary=result.get("website_summary") or "",
+            summary_source_url=result.get("summary_source_url") or "",
+            summary_status=summary_status,
+        )
+    logging.info(
+        f"Lead {lead_id}: stored {len(valid_emails)} email(s), summary_status={summary_status}."
+    )
 
 def start_job_thread(job_id, step_id, task):
     """Starts a background job in a new thread.
@@ -382,6 +441,26 @@ def scrape_leads_emails():
                                        current_row=processed, total_rows=total)
                         return
 
+                    try:
+                        _scrape_and_store_lead_enrichment(lead, max_pages, use_tor, headless)
+                    except Exception as e:
+                        logging.error(f"Failed to scrape lead {lead.get('lead_id', 'unknown')}: {e}")
+                        try:
+                            with Database() as db:
+                                db.update_lead(
+                                    place_id=lead.get("place_id"),
+                                    execution_id=lead.get("execution_id"),
+                                    status="failed",
+                                    summary_status="failed",
+                                )
+                        except Exception as db_err:
+                            logging.error(f"Failed to mark lead {lead.get('lead_id', 'unknown')} as failed in DB: {db_err}")
+
+                    processed += 1
+                    write_progress(job_id, step_id, input=job_input,
+                                   current_row=processed, total_rows=total)
+                    continue
+
                     lead_id = lead.get("lead_id", "unknown")
                     place_id = lead.get("place_id")
                     execution_id = lead.get("execution_id")
@@ -534,11 +613,11 @@ def patch_lead(lead_id):
     """
     try:
         data = request.get_json() or {}
-        allowed_fields = {"website", "emails", "status", "lead_flag", "lead_status", "notes"}
+        allowed_fields = {"website", "emails", "status", "lead_flag", "lead_status", "notes", "website_summary"}
         update_data = {key: data[key] for key in allowed_fields if key in data}
 
         if not update_data:
-            return jsonify({"error": "Provide at least one editable field: website, emails, status, lead_flag, lead_status, notes"}), 400
+            return jsonify({"error": "Provide at least one editable field: website, emails, status, lead_flag, lead_status, notes, website_summary"}), 400
 
         if "website" in update_data and update_data["website"]:
             validated_url, url_error = validate_url(update_data["website"])

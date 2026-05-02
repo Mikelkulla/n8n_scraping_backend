@@ -1,5 +1,5 @@
 import logging
-from .email_extractor import extract_emails_from_page
+from .email_extractor import extract_emails_from_page, extract_page_content
 
 logger = logging.getLogger(__name__)
 
@@ -24,3 +24,12 @@ def scrape_page(driver, url):
     except Exception as e:
         logger.error(f"Error scraping {url}: {e}")
         return set()
+
+def scrape_page_content(driver, url):
+    """Scrapes a single page for emails and visible body text."""
+    logger.info(f"Visiting URL: {url}")
+    try:
+        return extract_page_content(driver, url)
+    except Exception as e:
+        logger.error(f"Error scraping {url}: {e}")
+        return {"emails": set(), "body_text": ""}

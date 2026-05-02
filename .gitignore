@@ -49,3 +49,6 @@ directory_tree.txt
 directory_tree_2.txt
 .claude/*
 .claude/rules/jobs.md
+
+# Vite cache
+frontend/.vite/

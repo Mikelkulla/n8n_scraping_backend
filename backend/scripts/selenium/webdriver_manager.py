@@ -57,6 +57,8 @@ class WebDriverManager:
         else:
             self.driver = self._setup_standard()
         if self.driver:
+            self.driver.set_page_load_timeout(12)
+            self.driver.set_script_timeout(12)
             logging.info("WebDriver setup successful.")
         else:
             logging.error("WebDriver setup failed.")

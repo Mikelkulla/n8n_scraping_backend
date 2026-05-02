@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import type { FormEvent, ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import type { ChangeEvent, FormEvent, ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
@@ -80,6 +80,62 @@ function FlagBadge({ flag }: { flag?: string | null }) {
   return <span className={`flag flag-${flag}`}>{flag.replace("_", " ")}</span>;
 }
 
+function EditableFlagBadge({
+  value,
+  onChange,
+  disabled = false,
+}: {
+  value?: string | null;
+  onChange?: (value: string) => void;
+  disabled?: boolean;
+}) {
+  if (!onChange) return <FlagBadge flag={value} />;
+  const selectedValue = value || "needs_review";
+
+  return (
+    <select
+      className={`badge-select flag flag-${selectedValue}`}
+      value={selectedValue}
+      disabled={disabled}
+      title="Edit lead flag"
+      onClick={(event) => event.stopPropagation()}
+      onChange={(event) => onChange(event.target.value)}
+    >
+      {leadFlags.map((flag) => (
+        <option value={flag} key={flag}>{flag.replace("_", " ")}</option>
+      ))}
+    </select>
+  );
+}
+
+function EditableLeadStatusBadge({
+  value,
+  onChange,
+  disabled = false,
+}: {
+  value?: string | null;
+  onChange?: (value: string) => void;
+  disabled?: boolean;
+}) {
+  if (!onChange) return value ? <StatusBadge status={value} /> : <span className="muted">-</span>;
+  const selectedValue = value || "new";
+
+  return (
+    <select
+      className={`badge-select status status-${selectedValue}`}
+      value={selectedValue}
+      disabled={disabled}
+      title="Edit lead status"
+      onClick={(event) => event.stopPropagation()}
+      onChange={(event) => onChange(event.target.value)}
+    >
+      {leadStatuses.map((status) => (
+        <option value={status} key={status}>{status.replace("_", " ")}</option>
+      ))}
+    </select>
+  );
+}
+
 function PageHeader({
   title,
   description,
@@ -98,15 +154,49 @@ function PageHeader({
 function Field({
   label,
   children,
+  className = "",
 }: {
   label: string;
   children: ReactNode;
+  className?: string;
 }) {
   return (
-    <label className="field">
+    <label className={`field ${className}`.trim()}>
       <span>{label}</span>
       {children}
     </label>
+  );
+}
+
+function AutoResizeTextarea({
+  value,
+  onChange,
+  className = "",
+}: {
+  value: string;
+  onChange: (event: ChangeEvent<HTMLTextAreaElement>) => void;
+  className?: string;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    const textarea = ref.current;
+    if (!textarea) return;
+    const maxHeight = 112;
+    textarea.style.height = "auto";
+    const nextHeight = Math.min(textarea.scrollHeight, maxHeight);
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+  }, [value]);
+
+  return (
+    <textarea
+      ref={ref}
+      className={className}
+      value={value}
+      onChange={onChange}
+      rows={1}
+    />
   );
 }
 
@@ -163,11 +253,19 @@ function LeadsTable({
   leads,
   selectedLeadId,
   onSelectLead,
+  renderExpandedLead,
+  onUpdateLeadFlag,
+  onUpdateLeadStatus,
+  updatingLeadId,
   showActions = false,
 }: {
   leads: Lead[];
   selectedLeadId?: number;
   onSelectLead?: (lead: Lead) => void;
+  renderExpandedLead?: (lead: Lead) => ReactNode;
+  onUpdateLeadFlag?: (lead: Lead, value: string) => void;
+  onUpdateLeadStatus?: (lead: Lead, value: string) => void;
+  updatingLeadId?: number;
   showActions?: boolean;
 }) {
   if (!leads.length) {
@@ -195,86 +293,112 @@ function LeadsTable({
           </tr>
         </thead>
         <tbody>
-          {leads.map((lead, index) => (
-            <tr
-              key={`${lead.place_id ?? lead.lead_id ?? index}-${index}`}
-              className={[
-                selectedLeadId === lead.lead_id ? "selected-row" : "",
-                onSelectLead ? "clickable-row" : "",
-                lead.status ? `lead-row-${lead.status}` : "",
-              ].filter(Boolean).join(" ")}
-              onClick={() => onSelectLead?.(lead)}
-            >
-              <td>{lead.name || "Untitled"}</td>
-              <td>{lead.location || lead.address || "-"}</td>
-              <td className="phone-cell">{lead.phone || "-"}</td>
-              <td className="url-cell">
-                {lead.website ? (
-                  <a href={lead.website} target="_blank" rel="noreferrer">
-                    {lead.website}
-                  </a>
-                ) : (
-                  "-"
+          {leads.map((lead, index) => {
+            const rowKey = `${lead.place_id ?? lead.lead_id ?? index}-${index}`;
+            const isSelected = selectedLeadId === lead.lead_id;
+            const columnCount = showActions ? 8 : 7;
+
+            return (
+              <Fragment key={rowKey}>
+                <tr
+                  className={[
+                    isSelected ? "selected-row" : "",
+                    onSelectLead ? "clickable-row" : "",
+                    lead.status ? `lead-row-${lead.status}` : "",
+                  ].filter(Boolean).join(" ")}
+                  onClick={() => onSelectLead?.(lead)}
+                >
+                  <td>{lead.name || "Untitled"}</td>
+                  <td>{lead.location || lead.address || "-"}</td>
+                  <td className="phone-cell">{lead.phone || "-"}</td>
+                  <td className="url-cell">
+                    {lead.website ? (
+                      <a href={lead.website} target="_blank" rel="noreferrer">
+                        {lead.website}
+                      </a>
+                    ) : (
+                      "-"
+                    )}
+                  </td>
+                  <td className="email-cell"><EmailListCell emails={lead.emails} /></td>
+                  <td>
+                    <EditableFlagBadge
+                      value={lead.lead_flag}
+                      disabled={updatingLeadId === lead.lead_id}
+                      onChange={onUpdateLeadFlag ? (value) => onUpdateLeadFlag(lead, value) : undefined}
+                    />
+                  </td>
+                  <td>
+                    <EditableLeadStatusBadge
+                      value={lead.lead_status}
+                      disabled={updatingLeadId === lead.lead_id}
+                      onChange={onUpdateLeadStatus ? (value) => onUpdateLeadStatus(lead, value) : undefined}
+                    />
+                  </td>
+                  {showActions && (
+                    <td className="actions-cell">
+                      <div className="actions-row">
+                        <button
+                          className="icon-button"
+                          type="button"
+                          disabled={!lead.website}
+                          title={lead.website ? "Open website" : "No website"}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            if (lead.website) window.open(lead.website, "_blank", "noopener,noreferrer");
+                          }}
+                        >
+                          <ExternalLink size={15} />
+                        </button>
+                        <button
+                          className="icon-button"
+                          type="button"
+                          disabled={!lead.emails}
+                          title={lead.emails ? "Copy email" : "No email"}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            copyToClipboard(lead.emails ?? "");
+                          }}
+                        >
+                          <Mail size={15} />
+                        </button>
+                        <button
+                          className="icon-button"
+                          type="button"
+                          disabled={!lead.phone}
+                          title={lead.phone ? "Copy phone" : "No phone"}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            copyToClipboard(lead.phone ?? "");
+                          }}
+                        >
+                          <Phone size={15} />
+                        </button>
+                        <button
+                          className="icon-button"
+                          type="button"
+                          title="Copy lead"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            copyToClipboard(formatLeadAsText(lead));
+                          }}
+                        >
+                          <Copy size={15} />
+                        </button>
+                      </div>
+                    </td>
+                  )}
+                </tr>
+                {isSelected && renderExpandedLead && (
+                  <tr className="expanded-detail-row">
+                    <td colSpan={columnCount}>
+                      {renderExpandedLead(lead)}
+                    </td>
+                  </tr>
                 )}
-              </td>
-              <td className="email-cell"><EmailListCell emails={lead.emails} /></td>
-              <td><FlagBadge flag={lead.lead_flag} /></td>
-              <td>{lead.lead_status ? <StatusBadge status={lead.lead_status} /> : "-"}</td>
-              {showActions && (
-                <td className="actions-cell">
-                  <div className="actions-row">
-                    <button
-                      className="icon-button"
-                      type="button"
-                      disabled={!lead.website}
-                      title={lead.website ? "Open website" : "No website"}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        if (lead.website) window.open(lead.website, "_blank", "noopener,noreferrer");
-                      }}
-                    >
-                      <ExternalLink size={15} />
-                    </button>
-                    <button
-                      className="icon-button"
-                      type="button"
-                      disabled={!lead.emails}
-                      title={lead.emails ? "Copy email" : "No email"}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        copyToClipboard(lead.emails ?? "");
-                      }}
-                    >
-                      <Mail size={15} />
-                    </button>
-                    <button
-                      className="icon-button"
-                      type="button"
-                      disabled={!lead.phone}
-                      title={lead.phone ? "Copy phone" : "No phone"}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        copyToClipboard(lead.phone ?? "");
-                      }}
-                    >
-                      <Phone size={15} />
-                    </button>
-                    <button
-                      className="icon-button"
-                      type="button"
-                      title="Copy lead"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        copyToClipboard(formatLeadAsText(lead));
-                      }}
-                    >
-                      <Copy size={15} />
-                    </button>
-                  </div>
-                </td>
-              )}
-            </tr>
-          ))}
+              </Fragment>
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -287,12 +411,14 @@ function JobsTable({
   onSelectJob,
   onStopJob,
   stoppingJobId,
+  renderExpandedJob,
 }: {
   jobs: JobExecution[];
   selectedJobId?: string;
   onSelectJob?: (job: JobExecution) => void;
   onStopJob?: (jobId: string) => void;
   stoppingJobId?: string;
+  renderExpandedJob?: (job: JobExecution) => ReactNode;
 }) {
   if (!jobs.length) {
     return <EmptyState title="No jobs found" body="Run a scrape or enrichment workflow to create job history." />;
@@ -315,45 +441,65 @@ function JobsTable({
           </tr>
         </thead>
         <tbody>
-          {jobs.map((job) => (
-            <tr
-              key={`${job.execution_id}-${job.job_id}`}
-              className={[
-                selectedJobId === job.job_id ? "selected-row" : "",
-                onSelectJob ? "clickable-row" : "",
-              ].filter(Boolean).join(" ")}
-              onClick={() => onSelectJob?.(job)}
-            >
-              <td className="mono">{job.job_id}</td>
-              <td>{job.step_id}</td>
-              <td>{job.input}</td>
-              <td><StatusBadge status={job.status} /></td>
-              <td>{job.current_row ?? 0} / {job.total_rows ?? 0}</td>
-              <td>{job.updated_at}</td>
-              {showActions && (
-                <td className="actions-cell">
-                  {onSelectJob && (
-                    <button className="text-button" type="button" onClick={() => onSelectJob(job)}>
-                      Details
-                    </button>
+          {jobs.map((job) => {
+            const isSelected = selectedJobId === job.job_id;
+            const columnCount = showActions ? 7 : 6;
+
+            return (
+              <Fragment key={`${job.execution_id}-${job.job_id}`}>
+                <tr
+                  className={[
+                    isSelected ? "selected-row" : "",
+                    onSelectJob ? "clickable-row" : "",
+                  ].filter(Boolean).join(" ")}
+                  onClick={() => onSelectJob?.(job)}
+                >
+                  <td className="mono">{job.job_id}</td>
+                  <td>{job.step_id}</td>
+                  <td>{job.input}</td>
+                  <td><StatusBadge status={job.status} /></td>
+                  <td>{job.current_row ?? 0} / {job.total_rows ?? 0}</td>
+                  <td>{job.updated_at}</td>
+                  {showActions && (
+                    <td className="actions-cell">
+                      {onSelectJob && (
+                        <button
+                          className="text-button"
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onSelectJob(job);
+                          }}
+                        >
+                          Details
+                        </button>
+                      )}
+                      {onStopJob && job.status === "running" && (
+                        <button
+                          className="text-button danger-text"
+                          type="button"
+                          disabled={stoppingJobId === job.job_id}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onStopJob(job.job_id);
+                          }}
+                        >
+                          {stoppingJobId === job.job_id ? "Stopping" : "Stop"}
+                        </button>
+                      )}
+                    </td>
                   )}
-                  {onStopJob && job.status === "running" && (
-                    <button
-                      className="text-button danger-text"
-                      type="button"
-                      disabled={stoppingJobId === job.job_id}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onStopJob(job.job_id);
-                      }}
-                    >
-                      {stoppingJobId === job.job_id ? "Stopping" : "Stop"}
-                    </button>
-                  )}
-                </td>
-              )}
-            </tr>
-          ))}
+                </tr>
+                {isSelected && renderExpandedJob && (
+                  <tr className="expanded-detail-row">
+                    <td colSpan={columnCount}>
+                      {renderExpandedJob(job)}
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -690,13 +836,7 @@ function JobDetailPanel({ jobId }: { jobId?: string }) {
     return total > 0 ? Math.min(100, Math.round((current / total) * 100)) : 0;
   }, [progress.data]);
 
-  if (!jobId) {
-    return (
-      <section className="panel">
-        <EmptyState title="No job selected" body="Select a job from the table to inspect its current progress." />
-      </section>
-    );
-  }
+  if (!jobId) return null;
 
   return (
     <section className="panel">
@@ -794,7 +934,7 @@ function JobsPage() {
           />
         </Field>
       </section>
-      <section className="grid jobs-layout">
+      <section className="jobs-layout">
         <section className="panel">
           <div className="section-head">
             <div>
@@ -810,13 +950,13 @@ function JobsPage() {
             <JobsTable
               jobs={jobs.data?.jobs ?? []}
               selectedJobId={selectedJobId}
-              onSelectJob={(job) => setSelectedJobId(job.job_id)}
+              onSelectJob={(job) => setSelectedJobId((current) => current === job.job_id ? undefined : job.job_id)}
               onStopJob={(jobId) => stop.mutate(jobId)}
               stoppingJobId={stop.isPending ? stop.variables : undefined}
+              renderExpandedJob={(job) => <JobDetailPanel jobId={job.job_id} />}
             />
           )}
         </section>
-        <JobDetailPanel jobId={selectedJobId} />
       </section>
     </>
   );
@@ -975,27 +1115,19 @@ function LeadDetailPanel({
   const [website, setWebsite] = useState("");
   const [emails, setEmails] = useState("");
   const [status, setStatus] = useState("");
-  const [leadFlag, setLeadFlag] = useState("needs_review");
-  const [leadStatus, setLeadStatus] = useState("new");
   const [notes, setNotes] = useState("");
+  const [websiteSummary, setWebsiteSummary] = useState("");
   const [newEmail, setNewEmail] = useState("");
 
   useEffect(() => {
     setWebsite(lead?.website ?? "");
     setEmails(lead?.emails ?? "");
     setStatus(lead?.status ?? "");
-    setLeadFlag(lead?.lead_flag ?? "needs_review");
-    setLeadStatus(lead?.lead_status ?? "new");
     setNotes(lead?.notes ?? "");
+    setWebsiteSummary(lead?.website_summary ?? "");
   }, [lead]);
 
-  if (!lead) {
-    return (
-      <section className="panel">
-        <EmptyState title="No lead selected" body="Select a row to inspect and edit lead details." />
-      </section>
-    );
-  }
+  if (!lead) return null;
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -1006,9 +1138,8 @@ function LeadDetailPanel({
         website,
         emails,
         status,
-        lead_flag: leadFlag,
-        lead_status: leadStatus,
         notes,
+        website_summary: websiteSummary,
       },
     }, {
       onSuccess: (response) => onLeadUpdated?.(response.lead),
@@ -1020,11 +1151,34 @@ function LeadDetailPanel({
       <div className="section-head">
         <div>
           <h2>{lead.name || "Untitled lead"}</h2>
-          <p>{lead.address || lead.location || "No location"}</p>
+          <p>
+            {lead.address || lead.location || "No location"}
+            <span className="header-meta mono">{lead.job_id || "-"}</span>
+          </p>
         </div>
         <div className="stack">
-          <FlagBadge flag={lead.lead_flag} />
-          {lead.lead_status && <StatusBadge status={lead.lead_status} />}
+          <EditableFlagBadge
+            value={lead.lead_flag}
+            disabled={updateLead.isPending}
+            onChange={(value) => {
+              if (!lead.lead_id) return;
+              updateLead.mutate(
+                { leadId: lead.lead_id, payload: { lead_flag: value } },
+                { onSuccess: (response) => onLeadUpdated?.(response.lead) },
+              );
+            }}
+          />
+          <EditableLeadStatusBadge
+            value={lead.lead_status}
+            disabled={updateLead.isPending}
+            onChange={(value) => {
+              if (!lead.lead_id) return;
+              updateLead.mutate(
+                { leadId: lead.lead_id, payload: { lead_status: value } },
+                { onSuccess: (response) => onLeadUpdated?.(response.lead) },
+              );
+            }}
+          />
         </div>
       </div>
       <div className="detail-grid">
@@ -1033,16 +1187,16 @@ function LeadDetailPanel({
           <strong>{lead.phone || "-"}</strong>
         </div>
         <div>
-          <span className="label">Source job</span>
-          <strong className="mono">{lead.job_id || "-"}</strong>
-        </div>
-        <div>
           <span className="label">Created</span>
           <strong>{lead.created_at || "-"}</strong>
         </div>
         <div>
           <span className="label">Updated</span>
           <strong>{lead.updated_at || "-"}</strong>
+        </div>
+        <div>
+          <span className="label">Summary status</span>
+          <strong>{lead.summary_status || "-"}</strong>
         </div>
       </div>
       <form className="edit-form" onSubmit={submit}>
@@ -1061,23 +1215,18 @@ function LeadDetailPanel({
             <option value="pending">Pending</option>
           </select>
         </Field>
-        <Field label="Lead flag">
-          <select value={leadFlag} onChange={(event) => setLeadFlag(event.target.value)}>
-            {leadFlags.map((flag) => (
-              <option value={flag} key={flag}>{flag.replace("_", " ")}</option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Lead status">
-          <select value={leadStatus} onChange={(event) => setLeadStatus(event.target.value)}>
-            {leadStatuses.map((item) => (
-              <option value={item} key={item}>{item.replace("_", " ")}</option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Notes">
-          <textarea value={notes} onChange={(event) => setNotes(event.target.value)} rows={4} />
-        </Field>
+        <div className="large-text-row">
+          <Field label="Notes" className="large-text-field">
+            <AutoResizeTextarea value={notes} onChange={(event) => setNotes(event.target.value)} />
+          </Field>
+          <Field label="Website context" className="large-text-field">
+            <AutoResizeTextarea
+              className="summary-textarea"
+              value={websiteSummary}
+              onChange={(event) => setWebsiteSummary(event.target.value)}
+            />
+          </Field>
+        </div>
         <button type="submit" disabled={updateLead.isPending || !lead.lead_id}>
           {updateLead.isPending ? <Loader2 className="spin" size={17} /> : <CheckCircle2 size={17} />}
           Save lead
@@ -1159,6 +1308,7 @@ function LeadsPage() {
   const [selectedLead, setSelectedLead] = useState<Lead>();
   const [pageSize, setPageSize] = useState<number | "all">(30);
   const [page, setPage] = useState(1);
+  const updateLeadReview = useUpdateLead();
   const leads = useLeads({
     status: status || undefined,
     job_id: jobId || undefined,
@@ -1243,7 +1393,7 @@ function LeadsPage() {
           Needs enrichment
         </button>
       </section>
-      <section className="grid leads-layout">
+      <section className="leads-layout">
         <section className="panel">
           <div className="section-head">
             <div>
@@ -1302,12 +1452,34 @@ function LeadsPage() {
             <LeadsTable
               leads={visibleLeads}
               selectedLeadId={selectedLead?.lead_id}
-              onSelectLead={setSelectedLead}
+              onSelectLead={(lead) => {
+                setSelectedLead((current) => current?.lead_id === lead.lead_id ? undefined : lead);
+              }}
+              onUpdateLeadFlag={(lead, value) => {
+                if (!lead.lead_id) return;
+                updateLeadReview.mutate(
+                  { leadId: lead.lead_id, payload: { lead_flag: value } },
+                  { onSuccess: (response) => setSelectedLead((current) => current?.lead_id === lead.lead_id ? response.lead : current) },
+                );
+              }}
+              onUpdateLeadStatus={(lead, value) => {
+                if (!lead.lead_id) return;
+                updateLeadReview.mutate(
+                  { leadId: lead.lead_id, payload: { lead_status: value } },
+                  { onSuccess: (response) => setSelectedLead((current) => current?.lead_id === lead.lead_id ? response.lead : current) },
+                );
+              }}
+              updatingLeadId={updateLeadReview.isPending ? updateLeadReview.variables?.leadId : undefined}
+              renderExpandedLead={(lead) => (
+                <LeadDetailPanel
+                  lead={selectedLead?.lead_id === lead.lead_id ? selectedLead : lead}
+                  onLeadUpdated={setSelectedLead}
+                />
+              )}
               showActions
             />
           )}
         </section>
-        <LeadDetailPanel lead={selectedLead} onLeadUpdated={setSelectedLead} />
       </section>
     </>
   );
