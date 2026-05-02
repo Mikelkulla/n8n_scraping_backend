@@ -102,7 +102,11 @@ class Database:
             lead_review_columns = {
                 "lead_flag": "TEXT DEFAULT 'needs_review'",
                 "lead_status": "TEXT DEFAULT 'new'",
-                "notes": "TEXT"
+                "notes": "TEXT",
+                "website_summary": "TEXT",
+                "summary_source_url": "TEXT",
+                "summary_status": "TEXT",
+                "summary_updated_at": "TIMESTAMP"
             }
             for column, definition in lead_review_columns.items():
                 if column not in lead_columns:
@@ -473,6 +477,10 @@ class Database:
                     l.lead_flag,
                     l.lead_status,
                     l.notes,
+                    l.website_summary,
+                    l.summary_source_url,
+                    l.summary_status,
+                    l.summary_updated_at,
                     l.created_at,
                     l.updated_at,
                     j.job_id,
@@ -547,7 +555,7 @@ class Database:
             logging.error(f"Failed to insert lead for execution {execution_id}, place {place_id}: {e}")
             raise
 
-    def update_lead(self, place_id, execution_id=None, location=None, name=None, address=None, phone=None, website=None, emails=None, status=None):
+    def update_lead(self, place_id, execution_id=None, location=None, name=None, address=None, phone=None, website=None, emails=None, status=None, website_summary=None, summary_source_url=None, summary_status=None):
         """Updates an existing lead record in the database.
 
         Args:
@@ -560,6 +568,9 @@ class Database:
             website (str, optional): The new website. Defaults to None.
             emails (str, optional): The new comma-separated email string. Defaults to None.
             status (str, optional): The new status of the lead. Defaults to None.
+            website_summary (str, optional): Cleaned public website context text.
+            summary_source_url (str, optional): Page URL used for the summary.
+            summary_status (str, optional): Summary capture status.
         """
         try:
             set_clauses = []
@@ -585,6 +596,18 @@ class Database:
             if status is not None:
                 set_clauses.append("status = ?")
                 params.append(status)
+            summary_fields_changed = any(value is not None for value in [website_summary, summary_source_url, summary_status])
+            if website_summary is not None:
+                set_clauses.append("website_summary = ?")
+                params.append(website_summary)
+            if summary_source_url is not None:
+                set_clauses.append("summary_source_url = ?")
+                params.append(summary_source_url)
+            if summary_status is not None:
+                set_clauses.append("summary_status = ?")
+                params.append(summary_status)
+            if summary_fields_changed:
+                set_clauses.append("summary_updated_at = CURRENT_TIMESTAMP")
             set_clauses.append("updated_at = CURRENT_TIMESTAMP")
 
             if not set_clauses:
@@ -632,7 +655,7 @@ class Database:
                 ) VALUES (?, ?, 'unknown', 'new', ?)
             """, (lead_id, email, index == 0))
 
-    def update_lead_by_id(self, lead_id, website=None, emails=None, status=None, lead_flag=None, lead_status=None, notes=None):
+    def update_lead_by_id(self, lead_id, website=None, emails=None, status=None, lead_flag=None, lead_status=None, notes=None, website_summary=None):
         """Updates editable lead fields by lead_id.
 
         Args:
@@ -640,6 +663,7 @@ class Database:
             website (str | None): Replacement website value.
             emails (str | None): Replacement comma-separated emails value.
             status (str | None): Replacement lead status.
+            website_summary (str | None): Replacement website context text.
 
         Returns:
             dict | None: The updated lead row, or None if no row was found.
@@ -666,6 +690,10 @@ class Database:
             if notes is not None:
                 set_clauses.append("notes = ?")
                 params.append(notes)
+            if website_summary is not None:
+                set_clauses.append("website_summary = ?")
+                params.append(website_summary)
+                set_clauses.append("summary_updated_at = CURRENT_TIMESTAMP")
 
             if not set_clauses:
                 self.cursor.execute("""

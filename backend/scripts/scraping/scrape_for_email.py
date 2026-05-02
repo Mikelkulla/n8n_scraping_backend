@@ -1,6 +1,7 @@
 from urllib.parse import urljoin, urlparse
+import re
 from .sitemap_parser import get_robots_txt_urls, get_urls_from_sitemap
-from .page_scraper import scrape_page
+from .page_scraper import scrape_page, scrape_page_content
 from ..selenium.webdriver_manager import WebDriverManager
 from config.job_functions import write_progress, check_stop_signal
 from backend.app_settings import Config
@@ -61,6 +62,36 @@ def sort_urls_by_email_likelihood(urls):
     logging.info(f"Sorted {len(sorted_urls)} URLs by email likelihood")
     return sorted_urls
 
+SUMMARY_DROP_PATTERNS = [
+    "privacy policy", "terms of use", "terms and conditions", "cookie policy",
+    "accept cookies", "all rights reserved", "copyright", "newsletter",
+    "subscribe", "follow us", "sign up", "login", "log in"
+]
+
+def clean_summary_text(text, max_chars=1400):
+    """Cleans visible page text into a compact public website context excerpt."""
+    if not text:
+        return ""
+
+    cleaned_lines = []
+    for raw_line in text.splitlines():
+        line = re.sub(r"\s+", " ", raw_line).strip()
+        if len(line) < 25:
+            continue
+        lowered = line.lower()
+        if any(pattern in lowered for pattern in SUMMARY_DROP_PATTERNS):
+            continue
+        if len(line.split()) < 5:
+            continue
+        cleaned_lines.append(line)
+
+    text = " ".join(cleaned_lines)
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) > max_chars:
+        truncated = text[:max_chars].rsplit(" ", 1)[0].strip()
+        return truncated or text[:max_chars].strip()
+    return text
+
 class EmailScraper:
     """Orchestrates the process of scraping a website for email addresses.
 
@@ -97,6 +128,9 @@ class EmailScraper:
         self.manager = None
         self.driver = None
         self.all_emails = set()
+        self.website_summary = None
+        self.summary_source_url = None
+        self.summary_status = None
         self.visited_urls = set()
         self.urls_to_visit = [self.base_url]
         self.total_urls = 0
@@ -131,7 +165,7 @@ class EmailScraper:
         for url in potential_sitemaps:
             if url not in sitemap_urls:
                 sitemap_urls.append(url)
-        
+
         logging.info(f"Sitemap URLs to check for job {self.job_id}: {sitemap_urls}")
 
         for sitemap_url in sitemap_urls:
@@ -153,6 +187,31 @@ class EmailScraper:
         self.urls_to_visit = sort_urls_by_email_likelihood(filtered_urls)
         self.total_urls = min(len(self.urls_to_visit), self.max_pages)
         logging.info(f"Total URLs to visit after filtering and sorting for job {self.job_id}: {self.total_urls}")
+
+    def _capture_summary(self):
+        """Captures cleaned visible text from the website homepage only."""
+        if check_stop_signal(self.job_id, self.step_id):
+            self.summary_status = "failed"
+            return
+
+        try:
+            content = scrape_page_content(self.driver, self.base_url)
+            summary = clean_summary_text(content.get("body_text", ""))
+            if summary:
+                self.website_summary = summary
+                self.summary_source_url = self.base_url
+                self.summary_status = "captured"
+                self.all_emails.update(content.get("emails", set()))
+                logging.info(f"Captured website homepage summary for job {self.job_id} from {self.base_url}")
+                return
+        except Exception as e:
+            logging.warning(f"Homepage summary capture failed for {self.base_url}: {e}")
+            self.summary_status = "failed"
+            return
+
+        self.website_summary = None
+        self.summary_source_url = None
+        self.summary_status = "empty"
 
     def _scrape_worker(self, url):
         """The target function for each scraping thread.
@@ -230,6 +289,35 @@ class EmailScraper:
         finally:
             self._cleanup()
 
+    def run_with_summary(self):
+        """Runs the scraper and returns emails plus captured website context."""
+        try:
+            self._setup_driver()
+            self._capture_summary()
+            self._discover_urls()
+            self._filter_and_sort_urls()
+            self._scrape_pages()
+
+            logging.info(f"Finished scraping for job {self.job_id}. Total unique emails found: {len(self.all_emails)}")
+            logging.info(f"Emails: {self.all_emails}")
+            return {
+                "emails": list(self.all_emails),
+                "website_summary": self.website_summary,
+                "summary_source_url": self.summary_source_url,
+                "summary_status": self.summary_status or "failed",
+            }
+        except Exception as e:
+            logging.error(f"Scraping failed for job {self.job_id}: {e}")
+            write_progress(self.job_id, self.step_id, self.base_url, self.max_pages, self.use_tor, self.headless, status="failed", error_message=str(e), total_rows=self.total_urls)
+            return {
+                "emails": list(self.all_emails),
+                "website_summary": self.website_summary,
+                "summary_source_url": self.summary_source_url,
+                "summary_status": self.summary_status or "failed",
+            }
+        finally:
+            self._cleanup()
+
 def scrape_emails(job_id, step_id, base_url, max_pages=10, use_tor=False, headless=False, sitemap_limit=10, max_threads=Config.MAX_THREADS):
     """A convenience function to initiate an email scraping job.
 
@@ -254,3 +342,8 @@ def scrape_emails(job_id, step_id, base_url, max_pages=10, use_tor=False, headle
     """
     scraper = EmailScraper(job_id, step_id, base_url, max_pages, use_tor, headless, sitemap_limit, max_threads)
     return scraper.run()
+
+def scrape_emails_with_summary(job_id, step_id, base_url, max_pages=10, use_tor=False, headless=False, sitemap_limit=10, max_threads=Config.MAX_THREADS):
+    """Scrapes emails and a cleaned public website context excerpt."""
+    scraper = EmailScraper(job_id, step_id, base_url, max_pages, use_tor, headless, sitemap_limit, max_threads)
+    return scraper.run_with_summary()

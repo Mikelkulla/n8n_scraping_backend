@@ -51,6 +51,50 @@ class TestDatabase:
             assert 'lead_id' in lead_columns
             assert 'execution_id' in lead_columns
             assert 'place_id' in lead_columns
+            assert 'website_summary' in lead_columns
+            assert 'summary_source_url' in lead_columns
+            assert 'summary_status' in lead_columns
+            assert 'summary_updated_at' in lead_columns
+
+    def test_init_db_adds_summary_columns_to_existing_leads_table(self, tmp_path):
+        """Test that initialization migrates existing databases with summary columns."""
+        db_path = tmp_path / "existing.db"
+        conn = sqlite3.connect(db_path)
+        conn.execute("""
+            CREATE TABLE job_executions (
+                execution_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL,
+                step_id TEXT NOT NULL,
+                input TEXT NOT NULL,
+                status TEXT NOT NULL,
+                UNIQUE(job_id, step_id)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE leads (
+                lead_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                execution_id INTEGER NOT NULL,
+                place_id TEXT NOT NULL,
+                website TEXT,
+                emails TEXT,
+                status TEXT
+            )
+        """)
+        conn.commit()
+        conn.close()
+
+        Database(db_path=str(db_path))
+
+        migrated = sqlite3.connect(db_path)
+        cursor = migrated.cursor()
+        cursor.execute("PRAGMA table_info(leads);")
+        lead_columns = [row[1] for row in cursor.fetchall()]
+        migrated.close()
+
+        assert "website_summary" in lead_columns
+        assert "summary_source_url" in lead_columns
+        assert "summary_status" in lead_columns
+        assert "summary_updated_at" in lead_columns
 
     def test_insert_and_get_job_execution(self, temp_db):
         """Test inserting and retrieving a job execution."""
@@ -182,6 +226,31 @@ class TestDatabase:
             assert updated_lead is not None
             assert updated_lead['name'] == "Updated"
             assert updated_lead['emails'] == "test@example.com"
+
+    def test_update_lead_stores_summary_fields(self, temp_db):
+        """Test updating a lead with website summary fields."""
+        db, _ = temp_db
+        with db as conn:
+            conn.insert_job_execution("job1", "step1", "input1", status="running")
+            execution = conn.get_job_execution("job1", "step1")
+            execution_id = execution['execution_id']
+            conn.insert_lead(execution_id, "place1", name="Original", website="https://example.com")
+            conn.update_lead(
+                place_id="place1",
+                execution_id=execution_id,
+                website_summary="A useful public description of this business.",
+                summary_source_url="https://example.com/about",
+                summary_status="captured",
+            )
+
+            leads = conn.list_leads()
+            updated_lead = next((lead for lead in leads if lead["place_id"] == "place1"), None)
+
+            assert updated_lead is not None
+            assert updated_lead["website_summary"] == "A useful public description of this business."
+            assert updated_lead["summary_source_url"] == "https://example.com/about"
+            assert updated_lead["summary_status"] == "captured"
+            assert updated_lead["summary_updated_at"] is not None
 
     def test_insert_duplicate_lead_fails(self, temp_db):
         """Test that inserting a lead with a duplicate key fails."""

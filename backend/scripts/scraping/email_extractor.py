@@ -24,8 +24,8 @@ def extract_emails_from_text(text):
     logging.info(f"Extracted emails from text: {filtered_emails}")
     return filtered_emails
 
-def extract_emails_from_page(driver, url):
-    """Extracts email addresses from a given web page.
+def extract_page_content(driver, url):
+    """Extracts emails and visible body text from a given web page.
 
     This function navigates to a URL using a Selenium WebDriver and scans the
     page for email addresses. It checks both the visible text content and any
@@ -36,10 +36,11 @@ def extract_emails_from_page(driver, url):
         url (str): The URL of the web page to scrape.
 
     Returns:
-        set[str]: A set of unique email addresses found on the page.
+        dict: Page content with `emails` and `body_text` keys.
     """
-    logging.info(f"Scraping page for emails: {url}")
+    logging.info(f"Scraping page content: {url}")
     emails = set()
+    body = ""
     
     try:
         driver.get(url)
@@ -70,4 +71,19 @@ def extract_emails_from_page(driver, url):
     except Exception as e:
         logging.error(f"Error scraping page {url}: {e}")
     
+    return {"emails": emails, "body_text": body}
+
+def extract_emails_from_page(driver, url):
+    """Extracts email addresses from a given web page.
+
+    Args:
+        driver: The Selenium WebDriver instance to use for browsing.
+        url (str): The URL of the web page to scrape.
+
+    Returns:
+        set[str]: A set of unique email addresses found on the page.
+    """
+    content = extract_page_content(driver, url)
+    return content["emails"]
+
     return emails

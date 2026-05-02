@@ -49,6 +49,10 @@ export type Lead = {
   lead_flag?: string | null;
   lead_status?: string | null;
   notes?: string | null;
+  website_summary?: string | null;
+  summary_source_url?: string | null;
+  summary_status?: "captured" | "empty" | "failed" | string | null;
+  summary_updated_at?: string | null;
   created_at?: string;
   updated_at?: string;
 };
@@ -189,6 +193,7 @@ export type UpdateLeadRequest = {
   lead_flag?: string;
   lead_status?: string;
   notes?: string;
+  website_summary?: string;
 };
 
 export type UpdateLeadResponse = {

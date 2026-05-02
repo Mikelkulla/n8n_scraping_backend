@@ -27,9 +27,10 @@ Primary capabilities:
 1. Website email scraping: Selenium crawls a single website and returns email addresses directly.
 2. Google Maps lead discovery: Google Places Text Search fetches business leads by location/type and stores them in SQLite.
 3. Bulk lead email enrichment: background thread scrapes emails for stored leads that have websites and are not already scraped.
-4. Lead management UI: list/filter all leads, inspect details, copy contact data, open websites, edit website/emails/status.
-5. Job monitoring UI: list/filter jobs, inspect progress, stop running jobs.
-6. Dashboard summary: backend summary endpoint powers lead/job metric cards.
+4. Lead website context capture: bulk enrichment stores a cleaned public homepage excerpt.
+5. Lead management UI: list/filter all leads, inspect details, copy contact data, open websites, edit website/emails/status/context.
+6. Job monitoring UI: list/filter jobs, inspect progress, stop running jobs.
+7. Dashboard summary: backend summary endpoint powers lead/job metric cards.
 
 This is currently a local personal project. There is no authentication. Do not expose the backend publicly without adding auth, request caps, and rate limiting.
 
@@ -128,8 +129,8 @@ User action in React page
 | `config/logging.py` | `log_function_call` and `log_all_methods` decorators |
 | `config/utils.py` | URL validation, email validation, non-business domain filtering |
 | `backend/scripts/scraping/scrape_for_email.py` | `EmailScraper` orchestrator: sitemap discovery, page scraping, dedupe |
-| `backend/scripts/scraping/page_scraper.py` | Scrapes one page through Selenium and email extractor |
-| `backend/scripts/scraping/email_extractor.py` | Extracts emails from page text and `mailto:` links |
+| `backend/scripts/scraping/page_scraper.py` | Scrapes one page through Selenium and can return emails plus visible body text |
+| `backend/scripts/scraping/email_extractor.py` | Extracts emails from page text and `mailto:` links; can also return visible page text |
 | `backend/scripts/scraping/sitemap_parser.py` | Discovers URLs via `robots.txt`, XML sitemaps, HTML sitemap fallbacks |
 | `backend/scripts/selenium/webdriver_manager.py` | WebDriver factory for Chrome/Firefox, headless mode, Tor proxy |
 | `backend/scripts/google_api/google_places.py` | Google Places integration and DB lead storage |
@@ -169,6 +170,10 @@ Important columns:
 - `place_id`: Google place identifier.
 - `location`, `name`, `address`, `phone`, `website`, `emails`.
 - `status`: commonly `scraped`, `failed`, `skipped`, `pending`, or null.
+- `website_summary`: cleaned visible public website text captured during lead email enrichment.
+- `summary_source_url`: page URL used for `website_summary`.
+- `summary_status`: `captured`, `empty`, or `failed`.
+- `summary_updated_at`: timestamp of the last summary field update.
 - `created_at`, `updated_at`.
 
 Uniqueness:
@@ -203,7 +208,7 @@ All API endpoints are mounted under `/api`, except Flask root health check `/`.
 | `GET` | `/` | Backend health check | Frontend calls through `/backend-health` |
 | `POST` | `/api/scrape/website-emails` | Synchronously scrape one website for emails | Body: `url`, optional `max_pages`, `use_tor`, `headless`, `sitemap_limit` |
 | `POST` | `/api/scrape/google-maps` | Synchronously fetch/store Google Places leads | Body: `location`, optional `radius`, `place_type`, `max_places`; `radius` is currently ignored by Text Search implementation |
-| `POST` | `/api/scrape/leads-emails` | Start async email enrichment for stored leads | Returns `202` with `job_id`; poll `/api/progress/<job_id>` |
+| `POST` | `/api/scrape/leads-emails` | Start async email and website context enrichment for stored leads | Returns `202` with `job_id`; poll `/api/progress/<job_id>` |
 | `GET` | `/api/progress/<job_id>` | Get job progress/status | Checks known step IDs |
 | `POST` | `/api/stop/<job_id>` | Stop a running/stoppable job | Most useful for `leads_email_scrape` |
 | `GET` | `/api/leads` | List all leads with filters | Filters: `status`, `job_id`, `has_email=true/false`, `has_website=true/false` |
@@ -311,6 +316,10 @@ Business logic:
 - Starts background thread.
 - Validates each website.
 - Scrapes emails and updates lead `emails` and `status`.
+- Captures cleaned visible public homepage text into `website_summary` when useful homepage text is found.
+- Summary capture is intentionally simple: it uses the lead website homepage only and does not try about/service/contact fallback pages.
+- One-off `/api/scrape/website-emails` remains email-only and does not capture/store website summary context.
+- Summary status is stored as `captured`, `empty`, or `failed`; no LLM/API summarization is used.
 
 ### `GET /api/leads`
 
@@ -337,6 +346,10 @@ Response:
       "website": "https://example.com",
       "emails": "hello@example.com",
       "status": "scraped",
+      "website_summary": "Cleaned public website context...",
+      "summary_source_url": "https://example.com/about",
+      "summary_status": "captured",
+      "summary_updated_at": "timestamp",
       "created_at": "timestamp",
       "updated_at": "timestamp",
       "job_id": "uuid",
@@ -371,6 +384,7 @@ Notes:
 - `website` is validated and normalized when non-empty.
 - `emails` can be a comma-separated string or a list.
 - Emails are validated and example/test domains are filtered.
+- `website_summary` is editable so captured context can be manually cleaned up from the lead detail panel.
 
 ### `GET /api/jobs`
 
@@ -473,14 +487,15 @@ Supports:
 - Filtering by status, job ID, has email, has website.
 - Client-side pagination with page sizes 10, 30, 50, 100, and All.
 - Quick `Needs enrichment` filter.
-- Row click to open detail panel.
+- Row click expands/collapses lead details directly below the selected row; there is no persistent empty side panel.
 - Lead table rows are lightly color-coded by scrape status: scraped rows green, failed rows red, and skipped rows yellow.
 - Open website.
 - Copy emails.
 - Copy phone.
 - Copy formatted lead text.
 - The row action controls are always rendered for stable alignment: external-link icon for website, mail icon for email copy, phone icon for phone copy, copy icon for formatted lead copy. Website/email/phone actions are disabled when the row lacks the required value.
-- Edit website, emails, status through `PATCH /api/leads/<lead_id>`.
+- Edit website, emails, status, notes, and website context through `PATCH /api/leads/<lead_id>`.
+- Lead flag and lead review status are edited directly from their colored badges in the lead table row or expanded header.
 - CSV export through `/api/leads/export`.
 - Table layout keeps Status/Actions visible by wrapping website URLs and email tokens while keeping phone numbers on one line. The Actions column stays a normal table cell so row heights match wrapped content; its buttons sit in an inner flex row.
 
@@ -488,7 +503,7 @@ Supports:
 
 Supports:
 - Filtering by status, step ID, and limit.
-- Row click to inspect job progress.
+- Row click expands/collapses job progress details directly below the selected row; there is no persistent empty side panel.
 - Progress details from `/api/progress/<job_id>`.
 - Stop action for running jobs.
 
@@ -514,6 +529,7 @@ The left navigation sidebar can collapse/expand through the small top-left icon.
 - `@log_all_methods` wraps every method on decorated classes, currently used on `Database`.
 - Log files rotate at 100 MB and are stored in `backend/log_files/`.
 - `backend/app.py` reconfigures stdout/stderr as UTF-8 with replacement to avoid Windows console logging failures for Google Places names containing special Unicode.
+- Selenium WebDriver page-load and script timeouts are set to 12 seconds to keep dead or slow pages from blocking lead enrichment for too long.
 
 ## Environment Variables
 
@@ -533,7 +549,7 @@ The left navigation sidebar can collapse/expand through the small top-left icon.
 - `radius` is accepted by `/api/scrape/google-maps` but ignored by the current Google Places Text Search implementation.
 - Frontend is concentrated in `frontend/src/App.tsx`. If the UI grows further, split pages/components into separate files.
 - Clipboard features use `navigator.clipboard`, which works on localhost/secure contexts.
-- Manual lead editing supports website, legacy emails string, scrape status, lead flag, lead review status, and notes.
+- Manual lead editing supports website, legacy emails string, scrape status, lead flag, lead review status, notes, and captured website context.
 
 ## Lead and Email Review System
 
@@ -564,10 +580,11 @@ Additional endpoints:
 `GET /api/leads` also supports `lead_flag` and `lead_status` filters.
 
 Lead detail UI now supports:
-- Editing lead flag, review status, and notes.
+- Editing lead flag, review status, notes, and captured website context.
 - Reviewing individual emails.
 - Setting email category/status.
 - Marking one primary email.
 - Adding manual emails.
 - Deleting bad emails.
 - Email review rows are vertically stacked in the narrow lead detail panel so long email addresses remain readable; controls appear below the email text.
+- Captured website context is shown in the lead detail panel with summary status, source URL, and last summary update timestamp.
