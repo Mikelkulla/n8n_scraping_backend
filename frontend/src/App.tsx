@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Navigate, NavLink, Route, Routes, useSearchParams } from "react-router-dom";
 import type { ChangeEvent, FormEvent, ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -80,6 +81,108 @@ const leadStatuses = ["new", "reviewed", "ready", "contacted", "do_not_contact"]
 const emailStatuses = ["new", "valid", "invalid", "do_not_use"];
 const emailCategories = ["unknown", "booking", "info", "sales", "support", "accounting", "finance", "events", "hr", "marketing", "manager", "reception"];
 const campaignStatuses = ["draft", "active", "paused", "completed", "archived"];
+
+const pagePaths: Record<PageId, string> = {
+  dashboard: "/dashboard",
+  discover: "/discover",
+  website: "/website-emails",
+  enrich: "/enrich",
+  leads: "/leads",
+  campaigns: "/campaigns",
+  "email-rules": "/email-rules",
+  jobs: "/jobs",
+  settings: "/settings",
+};
+
+function readStorageValue<T>(storage: Storage | undefined, key: string, fallback: T): T {
+  if (!storage) return fallback;
+  try {
+    const raw = storage.getItem(key);
+    return raw === null ? fallback : JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function useBrowserStorageState<T>(
+  storageType: "local" | "session",
+  key: string,
+  fallback: T,
+) {
+  const storage = typeof window === "undefined"
+    ? undefined
+    : storageType === "local"
+      ? window.localStorage
+      : window.sessionStorage;
+  const [value, setValue] = useState<T>(() => readStorageValue(storage, key, fallback));
+
+  useEffect(() => {
+    if (!storage) return;
+    try {
+      storage.setItem(key, JSON.stringify(value));
+    } catch {
+      // Browser storage is best-effort UI persistence.
+    }
+  }, [key, storage, value]);
+
+  return [value, setValue] as const;
+}
+
+function useLocalStorageState<T>(key: string, fallback: T) {
+  return useBrowserStorageState("local", key, fallback);
+}
+
+function useSessionStorageState<T>(key: string, fallback: T) {
+  return useBrowserStorageState("session", key, fallback);
+}
+
+function getSearchString(searchParams: URLSearchParams, key: string, fallback = "") {
+  return searchParams.get(key) ?? fallback;
+}
+
+function getSearchNumber(searchParams: URLSearchParams, key: string, fallback: number) {
+  const value = Number(searchParams.get(key));
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function getSearchBooleanString(searchParams: URLSearchParams, key: string, fallback = "") {
+  const value = searchParams.get(key);
+  return value === "true" || value === "false" ? value : fallback;
+}
+
+function getSearchPageSize(searchParams: URLSearchParams, key: string, fallback: number | "all") {
+  const raw = searchParams.get(key);
+  if (raw === "all") return "all";
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function useUrlState() {
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const setParams = (
+    values: Record<string, string | number | boolean | undefined | null>,
+    options?: { replace?: boolean },
+  ) => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      Object.entries(values).forEach(([key, value]) => {
+        if (value === undefined || value === null || value === "") {
+          next.delete(key);
+        } else {
+          next.set(key, String(value));
+        }
+      });
+      return next;
+    }, { replace: options?.replace ?? true });
+  };
+
+  const setParam = (key: string, value: string | number | boolean | undefined | null, options?: { replace?: boolean }) => {
+    setParams({ [key]: value }, options);
+  };
+
+  return { searchParams, setParam, setParams };
+}
 const campaignStages = ["review", "ready_for_email", "drafted", "approved", "contacted", "replied", "closed", "skipped", "do_not_contact"];
 const campaignPriorities = ["", "low", "normal", "high"];
 const blockedEmailGenerationStages = new Set(["contacted", "replied", "closed", "skipped", "do_not_contact"]);
@@ -773,9 +876,13 @@ function DashboardPage() {
 
 function DiscoverPage() {
   const scrape = useGoogleMapsScrape();
-  const [location, setLocation] = useState("");
-  const [placeType, setPlaceType] = useState("lodging");
-  const [maxPlaces, setMaxPlaces] = useState(20);
+  const { searchParams, setParam } = useUrlState();
+  const location = getSearchString(searchParams, "location");
+  const placeType = getSearchString(searchParams, "place_type", "lodging");
+  const maxPlaces = getSearchNumber(searchParams, "max_places", 20);
+  const setLocation = (value: string) => setParam("location", value);
+  const setPlaceType = (value: string) => setParam("place_type", value);
+  const setMaxPlaces = (value: number) => setParam("max_places", value);
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -842,11 +949,17 @@ function DiscoverPage() {
 
 function WebsiteEmailPage() {
   const scrape = useWebsiteEmailScrape();
-  const [url, setUrl] = useState("");
-  const [maxPages, setMaxPages] = useState(10);
-  const [sitemapLimit, setSitemapLimit] = useState(10);
-  const [headless, setHeadless] = useState(true);
-  const [useTor, setUseTor] = useState(false);
+  const { searchParams, setParam } = useUrlState();
+  const url = getSearchString(searchParams, "url");
+  const maxPages = getSearchNumber(searchParams, "max_pages", 10);
+  const sitemapLimit = getSearchNumber(searchParams, "sitemap_limit", 10);
+  const headless = getSearchBooleanString(searchParams, "headless", "true") !== "false";
+  const useTor = getSearchBooleanString(searchParams, "use_tor", "false") === "true";
+  const setUrl = (value: string) => setParam("url", value);
+  const setMaxPages = (value: number) => setParam("max_pages", value);
+  const setSitemapLimit = (value: number) => setParam("sitemap_limit", value);
+  const setHeadless = (value: boolean) => setParam("headless", value);
+  const setUseTor = (value: boolean) => setParam("use_tor", value);
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -1056,10 +1169,15 @@ function JobDetailPanel({ jobId }: { jobId?: string }) {
 }
 
 function JobsPage() {
-  const [status, setStatus] = useState("");
-  const [stepId, setStepId] = useState("");
-  const [limit, setLimit] = useState(50);
-  const [selectedJobId, setSelectedJobId] = useState<string>();
+  const { searchParams, setParam } = useUrlState();
+  const status = getSearchString(searchParams, "status");
+  const stepId = getSearchString(searchParams, "step_id");
+  const limit = getSearchNumber(searchParams, "limit", 50);
+  const selectedJobId = getSearchString(searchParams, "job_id") || undefined;
+  const setStatus = (value: string) => setParam("status", value);
+  const setStepId = (value: string) => setParam("step_id", value);
+  const setLimit = (value: number) => setParam("limit", value);
+  const setSelectedJobId = (value?: string) => setParam("job_id", value ?? "", { replace: false });
   const jobs = useJobs({
     status: status === "" ? undefined : status as JobStatus,
     step_id: stepId === "" ? undefined : stepId as JobStepId,
@@ -1117,7 +1235,7 @@ function JobsPage() {
             <JobsTable
               jobs={jobs.data?.jobs ?? []}
               selectedJobId={selectedJobId}
-              onSelectJob={(job) => setSelectedJobId((current) => current === job.job_id ? undefined : job.job_id)}
+              onSelectJob={(job) => setSelectedJobId(selectedJobId === job.job_id ? undefined : job.job_id)}
               onStopJob={(jobId) => stop.mutate(jobId)}
               stoppingJobId={stop.isPending ? stop.variables : undefined}
               renderExpandedJob={(job) => <JobDetailPanel jobId={job.job_id} />}
@@ -1131,10 +1249,15 @@ function JobsPage() {
 
 function EnrichPage() {
   const enrich = useLeadEmailEnrichment();
-  const [jobId, setJobId] = useState<string>();
-  const [maxPages, setMaxPages] = useState(30);
-  const [headless, setHeadless] = useState(true);
-  const [useTor, setUseTor] = useState(false);
+  const { searchParams, setParam } = useUrlState();
+  const jobId = getSearchString(searchParams, "job_id") || undefined;
+  const maxPages = getSearchNumber(searchParams, "max_pages", 30);
+  const headless = getSearchBooleanString(searchParams, "headless", "true") !== "false";
+  const useTor = getSearchBooleanString(searchParams, "use_tor", "false") === "true";
+  const setJobId = (value?: string) => setParam("job_id", value ?? "", { replace: false });
+  const setMaxPages = (value: number) => setParam("max_pages", value);
+  const setHeadless = (value: boolean) => setParam("headless", value);
+  const setUseTor = (value: boolean) => setParam("use_tor", value);
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -1480,20 +1603,42 @@ function LeadDetailPanel({
 }
 
 function LeadsPage() {
-  const [status, setStatus] = useState("");
-  const [jobId, setJobId] = useState("");
-  const [hasEmail, setHasEmail] = useState("");
-  const [hasWebsite, setHasWebsite] = useState("");
-  const [hasPhone, setHasPhone] = useState("");
-  const [nameColumnFilter, setNameColumnFilter] = useState("");
-  const [businessTypeColumnFilter, setBusinessTypeColumnFilter] = useState("");
-  const [searchLocationColumnFilter, setSearchLocationColumnFilter] = useState("");
-  const [campaignColumnFilter, setCampaignColumnFilter] = useState("");
-  const [leadFlagFilter, setLeadFlagFilter] = useState("");
-  const [leadStatusFilter, setLeadStatusFilter] = useState("");
-  const [selectedLead, setSelectedLead] = useState<Lead>();
-  const [pageSize, setPageSize] = useState<number | "all">(30);
-  const [page, setPage] = useState(1);
+  const { searchParams, setParam } = useUrlState();
+  const [preferredPageSize, setPreferredPageSize] = useLocalStorageState<number | "all">("scraping-console:leads-page-size", 30);
+  const status = getSearchString(searchParams, "status");
+  const jobId = getSearchString(searchParams, "job_id");
+  const hasEmail = getSearchBooleanString(searchParams, "has_email");
+  const hasWebsite = getSearchBooleanString(searchParams, "has_website");
+  const hasPhone = getSearchBooleanString(searchParams, "has_phone");
+  const nameColumnFilter = getSearchString(searchParams, "name");
+  const businessTypeColumnFilter = getSearchString(searchParams, "business_type");
+  const searchLocationColumnFilter = getSearchString(searchParams, "search_location");
+  const campaignColumnFilter = getSearchString(searchParams, "campaign");
+  const leadFlagFilter = getSearchString(searchParams, "lead_flag");
+  const leadStatusFilter = getSearchString(searchParams, "lead_status");
+  const selectedLeadId = getSearchNumber(searchParams, "lead_id", 0);
+  const pageSize = getSearchPageSize(searchParams, "page_size", preferredPageSize);
+  const page = getSearchNumber(searchParams, "page", 1);
+  const setStatus = (value: string) => setParam("status", value);
+  const setJobId = (value: string) => setParam("job_id", value);
+  const setHasEmail = (value: string) => setParam("has_email", value);
+  const setHasWebsite = (value: string) => setParam("has_website", value);
+  const setHasPhone = (value: string) => setParam("has_phone", value);
+  const setNameColumnFilter = (value: string) => setParam("name", value);
+  const setBusinessTypeColumnFilter = (value: string) => setParam("business_type", value);
+  const setSearchLocationColumnFilter = (value: string) => setParam("search_location", value);
+  const setCampaignColumnFilter = (value: string) => setParam("campaign", value);
+  const setLeadFlagFilter = (value: string) => setParam("lead_flag", value);
+  const setLeadStatusFilter = (value: string) => setParam("lead_status", value);
+  const setSelectedLead = (lead?: Lead) => setParam("lead_id", lead?.lead_id ?? "", { replace: false });
+  const setPageSize = (value: number | "all") => {
+    setPreferredPageSize(value);
+    setParam("page_size", value);
+  };
+  const setPage = (value: React.SetStateAction<number>) => {
+    const nextPage = typeof value === "function" ? value(page) : value;
+    setParam("page", Math.max(1, nextPage), { replace: false });
+  };
   const updateLeadReview = useUpdateLead();
   const leads = useLeads({
     status: status || undefined,
@@ -1505,6 +1650,7 @@ function LeadsPage() {
     lead_status: leadStatusFilter || undefined,
   });
   const serverLeads = leads.data?.leads ?? [];
+  const selectedLead = serverLeads.find((lead) => lead.lead_id === selectedLeadId);
   const businessTypeOptions = useMemo(() => {
     const counts = new Map<string, number>();
     serverLeads.forEach((lead) => {
@@ -1568,10 +1714,19 @@ function LeadsPage() {
   const visibleLeads = pageSize === "all"
     ? allLeads
     : allLeads.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const didMountLeadFilters = useRef(false);
 
   useEffect(() => {
+    if (!didMountLeadFilters.current) {
+      didMountLeadFilters.current = true;
+      return;
+    }
     setPage(1);
   }, [nameColumnFilter, status, jobId, hasEmail, hasWebsite, hasPhone, businessTypeColumnFilter, searchLocationColumnFilter, campaignColumnFilter, leadFlagFilter, leadStatusFilter, pageSize]);
+
+  useEffect(() => {
+    if (selectedLeadId && leads.isSuccess && !selectedLead) setSelectedLead(undefined);
+  }, [leads.isSuccess, selectedLead, selectedLeadId]);
 
   return (
     <>
@@ -1719,20 +1874,24 @@ function LeadsPage() {
                 onCampaignChange: setCampaignColumnFilter,
               }}
               onSelectLead={(lead) => {
-                setSelectedLead((current) => current?.lead_id === lead.lead_id ? undefined : lead);
+                setSelectedLead(selectedLead?.lead_id === lead.lead_id ? undefined : lead);
               }}
               onUpdateLeadFlag={(lead, value) => {
                 if (!lead.lead_id) return;
                 updateLeadReview.mutate(
                   { leadId: lead.lead_id, payload: { lead_flag: value } },
-                  { onSuccess: (response) => setSelectedLead((current) => current?.lead_id === lead.lead_id ? response.lead : current) },
+                  { onSuccess: (response) => {
+                    if (selectedLead?.lead_id === lead.lead_id) setSelectedLead(response.lead);
+                  } },
                 );
               }}
               onUpdateLeadStatus={(lead, value) => {
                 if (!lead.lead_id) return;
                 updateLeadReview.mutate(
                   { leadId: lead.lead_id, payload: { lead_status: value } },
-                  { onSuccess: (response) => setSelectedLead((current) => current?.lead_id === lead.lead_id ? response.lead : current) },
+                  { onSuccess: (response) => {
+                    if (selectedLead?.lead_id === lead.lead_id) setSelectedLead(response.lead);
+                  } },
                 );
               }}
               updatingLeadId={updateLeadReview.isPending ? updateLeadReview.variables?.leadId : undefined}
@@ -2070,20 +2229,39 @@ function CampaignsPage() {
   const generateCampaignLeadEmail = useGenerateCampaignLeadEmail();
   const generateCampaignEmails = useGenerateCampaignEmails();
   const businessRules = useBusinessTypeEmailRules();
-  const [selectedCampaignId, setSelectedCampaignId] = useState<number>();
-  const [selectedCampaignLeadId, setSelectedCampaignLeadId] = useState<number>();
-  const [name, setName] = useState("");
-  const [businessType, setBusinessType] = useState("");
-  const [searchLocation, setSearchLocation] = useState("");
-  const [statusFilter, setStatusFilter] = useState("scraped");
-  const [hasEmail, setHasEmail] = useState("true");
-  const [hasWebsite, setHasWebsite] = useState("");
-  const [hasPhone, setHasPhone] = useState("");
-  const [leadFlagFilter, setLeadFlagFilter] = useState("");
-  const [leadStatusFilter, setLeadStatusFilter] = useState("");
-  const [notes, setNotes] = useState("");
-  const [stageFilter, setStageFilter] = useState("");
-  const [campaignSearch, setCampaignSearch] = useState("");
+  const { searchParams, setParam, setParams } = useUrlState();
+  const selectedCampaignId = getSearchNumber(searchParams, "campaign_id", 0) || undefined;
+  const selectedCampaignLeadId = getSearchNumber(searchParams, "campaign_lead_id", 0) || undefined;
+  const [name, setName] = useSessionStorageState("scraping-console:campaign-draft-name", "");
+  const businessType = getSearchString(searchParams, "business_type");
+  const searchLocation = getSearchString(searchParams, "search_location");
+  const statusFilter = getSearchString(searchParams, "lead_status", "scraped");
+  const hasEmail = getSearchBooleanString(searchParams, "has_email", "true");
+  const hasWebsite = getSearchBooleanString(searchParams, "has_website");
+  const hasPhone = getSearchBooleanString(searchParams, "has_phone");
+  const leadFlagFilter = getSearchString(searchParams, "lead_flag");
+  const leadStatusFilter = getSearchString(searchParams, "review_status");
+  const [notes, setNotes] = useSessionStorageState("scraping-console:campaign-draft-notes", "");
+  const stageFilter = getSearchString(searchParams, "stage");
+  const campaignSearch = getSearchString(searchParams, "search");
+  const setSelectedCampaignId = (value?: number) => setParam("campaign_id", value ?? "", { replace: false });
+  const setSelectedCampaignLeadId = (value?: number) => setParam("campaign_lead_id", value ?? "", { replace: false });
+  const selectCampaign = (campaignId: number) => {
+    setParams({ campaign_id: campaignId, campaign_lead_id: "" }, { replace: false });
+  };
+  const selectStage = (stage: string) => {
+    setParams({ stage, campaign_lead_id: "" });
+  };
+  const setBusinessType = (value: string) => setParam("business_type", value);
+  const setSearchLocation = (value: string) => setParam("search_location", value);
+  const setStatusFilter = (value: string) => setParam("lead_status", value);
+  const setHasEmail = (value: string) => setParam("has_email", value);
+  const setHasWebsite = (value: string) => setParam("has_website", value);
+  const setHasPhone = (value: string) => setParam("has_phone", value);
+  const setLeadFlagFilter = (value: string) => setParam("lead_flag", value);
+  const setLeadStatusFilter = (value: string) => setParam("review_status", value);
+  const setStageFilter = (value: string) => setParam("stage", value);
+  const setCampaignSearch = (value: string) => setParam("search", value);
   const leadFilterOptions = useLeadFilterOptions();
   const allLeadOptions = useLeads({});
   const campaignFilters = useMemo(() => ({
@@ -2244,10 +2422,7 @@ function CampaignsPage() {
                   type="button"
                   className={`campaign-list-item ${selectedCampaignId === item.campaign_id ? "active" : ""}`}
                   key={item.campaign_id}
-                  onClick={() => {
-                    setSelectedCampaignId(item.campaign_id);
-                    setSelectedCampaignLeadId(undefined);
-                  }}
+                  onClick={() => selectCampaign(item.campaign_id)}
                 >
                   <span>
                     <strong>{item.name}</strong>
@@ -2408,10 +2583,7 @@ function CampaignsPage() {
           <CampaignStageCounts
             campaign={activeCampaign}
             activeStage={stageFilter}
-            onStageChange={(stage) => {
-              setStageFilter(stage);
-              setSelectedCampaignLeadId(undefined);
-            }}
+            onStageChange={selectStage}
           />
           <div className="campaign-toolbar">
             <Field label="Search">
@@ -2426,7 +2598,7 @@ function CampaignsPage() {
             <CampaignLeadsTable
               leads={campaignLeads.data?.leads ?? []}
               selectedCampaignLeadId={selectedCampaignLeadId}
-              onSelectLead={(lead) => setSelectedCampaignLeadId((current) => current === lead.campaign_lead_id ? undefined : lead.campaign_lead_id)}
+              onSelectLead={(lead) => setSelectedCampaignLeadId(selectedCampaignLeadId === lead.campaign_lead_id ? undefined : lead.campaign_lead_id)}
               onUpdate={(lead, payload) => updateCampaignLead.mutate({
                 campaignId: lead.campaign_id,
                 campaignLeadId: lead.campaign_lead_id,
@@ -2782,21 +2954,8 @@ function SettingsPage() {
   );
 }
 
-function CurrentPage({ page }: { page: PageId }) {
-  if (page === "discover") return <DiscoverPage />;
-  if (page === "website") return <WebsiteEmailPage />;
-  if (page === "enrich") return <EnrichPage />;
-  if (page === "leads") return <LeadsPage />;
-  if (page === "campaigns") return <CampaignsPage />;
-  if (page === "email-rules") return <EmailRulesPage />;
-  if (page === "jobs") return <JobsPage />;
-  if (page === "settings") return <SettingsPage />;
-  return <DashboardPage />;
-}
-
 export function App() {
-  const [page, setPage] = useState<PageId>("dashboard");
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useLocalStorageState("scraping-console:sidebar-collapsed", false);
   const health = useBackendHealth();
   const queryClient = useQueryClient();
 
@@ -2822,16 +2981,15 @@ export function App() {
           {pages.map((item) => {
             const Icon = item.icon;
             return (
-              <button
+              <NavLink
                 key={item.id}
-                type="button"
-                className={page === item.id ? "active" : ""}
+                to={pagePaths[item.id]}
+                className={({ isActive }) => isActive ? "active" : ""}
                 title={item.label}
-                onClick={() => setPage(item.id)}
               >
                 <Icon size={18} />
                 <span>{item.label}</span>
-              </button>
+              </NavLink>
             );
           })}
         </nav>
@@ -2851,7 +3009,19 @@ export function App() {
             {health.isSuccess ? <StatusBadge status={health.data.status} /> : <StatusBadge />}
           </div>
         </div>
-        <CurrentPage page={page} />
+        <Routes>
+          <Route path="/" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/discover" element={<DiscoverPage />} />
+          <Route path="/website-emails" element={<WebsiteEmailPage />} />
+          <Route path="/enrich" element={<EnrichPage />} />
+          <Route path="/leads" element={<LeadsPage />} />
+          <Route path="/campaigns" element={<CampaignsPage />} />
+          <Route path="/email-rules" element={<EmailRulesPage />} />
+          <Route path="/jobs" element={<JobsPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        </Routes>
       </main>
     </div>
   );
