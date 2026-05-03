@@ -22,12 +22,22 @@ api_bp = Blueprint("api", __name__)
 # Dictionary to track active scraping threads
 active_jobs = {}
 
-def _scrape_and_store_lead_enrichment(lead, max_pages, use_tor, headless):
+def _scrape_and_store_lead_enrichment(
+    lead,
+    max_pages,
+    use_tor,
+    headless,
+    stop_job_id=None,
+    stop_step_id=None,
+):
     """Scrapes one lead website and stores emails plus website summary context."""
     lead_id = lead.get("lead_id", "unknown")
     place_id = lead.get("place_id")
     execution_id = lead.get("execution_id")
     website = lead.get("website")
+
+    if stop_job_id and stop_step_id and check_stop_signal(stop_job_id, stop_step_id):
+        return True
 
     if not website:
         logging.warning(f"Lead {lead_id} has no website - skipping.")
@@ -38,7 +48,7 @@ def _scrape_and_store_lead_enrichment(lead, max_pages, use_tor, headless):
                 status="skipped",
                 summary_status="empty",
             )
-        return
+        return False
 
     validated_url, url_error = validate_url(website)
     if url_error:
@@ -50,7 +60,7 @@ def _scrape_and_store_lead_enrichment(lead, max_pages, use_tor, headless):
                 status="failed",
                 summary_status="failed",
             )
-        return
+        return False
 
     sub_job_id = str(uuid.uuid4())
     logging.info(f"Scraping emails and website context for lead {lead_id} ({validated_url})")
@@ -61,8 +71,14 @@ def _scrape_and_store_lead_enrichment(lead, max_pages, use_tor, headless):
         max_pages=max_pages,
         use_tor=use_tor,
         headless=headless,
-        sitemap_limit=10
+        sitemap_limit=10,
+        stop_job_id=stop_job_id,
+        stop_step_id=stop_step_id,
     )
+    if stop_job_id and stop_step_id and check_stop_signal(stop_job_id, stop_step_id):
+        logging.info(f"Stop signal received while scraping lead {lead_id}; skipping lead update.")
+        return True
+
     valid_emails = validate_emails(result.get("emails", []))
     emails_str = ",".join(valid_emails) if valid_emails else None
     summary_status = result.get("summary_status") or "empty"
@@ -80,6 +96,7 @@ def _scrape_and_store_lead_enrichment(lead, max_pages, use_tor, headless):
     logging.info(
         f"Lead {lead_id}: stored {len(valid_emails)} email(s), summary_status={summary_status}."
     )
+    return False
 
 def start_job_thread(job_id, step_id, task):
     """Starts a background job in a new thread.
@@ -363,14 +380,18 @@ def stop_scrape(job_id):
         if step_id == "google_maps_scrape" and job_id not in active_jobs:
             return jsonify({"error": f"Job {job_id} is not running or already stopped"}), 404
 
-        # Update the job-scoped stop flag in the database.
+        response_status = "stopped"
+
+        # Update the job-scoped stop flag in the database. Keep status running
+        # until the worker observes the flag and exits, so polling does not
+        # report a terminal state while the scrape thread is still active.
         with Database() as db:
             progress = db.get_job_execution(job_id, step_id)
             if progress and progress["status"] == "running":
                 write_progress(
                     job_id=job_id,
                     step_id=step_id,
-                    status="stopped",
+                    status="running",
                     stop_call=True,
                     # Carry over existing details
                     input=progress["input"],
@@ -380,6 +401,7 @@ def stop_scrape(job_id):
                     current_row=progress["current_row"],
                     total_rows=progress["total_rows"]
                 )
+                response_status = "stopping"
                 logging.info(f"Stop signal set for job {job_id} (step: {step_id}).")
 
         # For async jobs, which are in active_jobs, wait for the thread to terminate.
@@ -387,10 +409,14 @@ def stop_scrape(job_id):
             thread = active_jobs.get(job_id)
             if thread:
                 thread.join(timeout=10)
-                active_jobs.pop(job_id, None)
-                logging.info(f"Asynchronous job {job_id} thread joined and removed.")
+                if thread.is_alive():
+                    logging.info(f"Asynchronous job {job_id} is still stopping after join timeout.")
+                else:
+                    active_jobs.pop(job_id, None)
+                    response_status = "stopped"
+                    logging.info(f"Asynchronous job {job_id} thread joined and removed.")
 
-        return jsonify({"job_id": job_id, "status": "stopped"}), 200
+        return jsonify({"job_id": job_id, "status": response_status}), 200
 
     except Exception as e:
         logging.error(f"Error stopping job {job_id}: {e}")
@@ -447,8 +473,16 @@ def scrape_leads_emails():
                                        current_row=processed, total_rows=total)
                         return
 
+                    stopped = False
                     try:
-                        _scrape_and_store_lead_enrichment(lead, max_pages, use_tor, headless)
+                        stopped = _scrape_and_store_lead_enrichment(
+                            lead,
+                            max_pages,
+                            use_tor,
+                            headless,
+                            stop_job_id=job_id,
+                            stop_step_id=step_id,
+                        )
                     except Exception as e:
                         logging.error(f"Failed to scrape lead {lead.get('lead_id', 'unknown')}: {e}")
                         try:
@@ -461,6 +495,12 @@ def scrape_leads_emails():
                                 )
                         except Exception as db_err:
                             logging.error(f"Failed to mark lead {lead.get('lead_id', 'unknown')} as failed in DB: {db_err}")
+
+                    if stopped or check_stop_signal(job_id, step_id):
+                        logging.info(f"Stop signal received for job {job_id} while processing lead.")
+                        write_progress(job_id, step_id, input=job_input, status="stopped",
+                                       current_row=processed, total_rows=total)
+                        return
 
                     processed += 1
                     write_progress(job_id, step_id, input=job_input,
