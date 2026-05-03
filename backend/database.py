@@ -128,6 +128,7 @@ class Database:
 
             # Connect to the database to create tables
             conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             
             # Enable foreign key support
@@ -169,7 +170,7 @@ class Database:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     status TEXT,
-                    UNIQUE(execution_id, place_id),
+                    UNIQUE(place_id),
                     FOREIGN KEY (execution_id) REFERENCES job_executions(execution_id)
                 )
             """)
@@ -285,6 +286,23 @@ class Database:
             """)
 
             cursor.execute("""
+                CREATE TABLE IF NOT EXISTS lead_discoveries (
+                    discovery_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    lead_id INTEGER NOT NULL,
+                    execution_id INTEGER NOT NULL,
+                    place_id TEXT NOT NULL,
+                    location TEXT,
+                    business_type TEXT,
+                    search_location TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(lead_id, execution_id),
+                    FOREIGN KEY (lead_id) REFERENCES leads(lead_id) ON DELETE CASCADE,
+                    FOREIGN KEY (execution_id) REFERENCES job_executions(execution_id) ON DELETE CASCADE
+                )
+            """)
+
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS app_settings (
                     key TEXT PRIMARY KEY,
                     value TEXT,
@@ -310,6 +328,8 @@ class Database:
                     VALUES (?, ?, CURRENT_TIMESTAMP)
                 """, (key, value))
 
+            self._migrate_global_lead_uniqueness(cursor)
+
             cursor.execute("""
                 SELECT lead_id, emails
                 FROM leads
@@ -334,6 +354,351 @@ class Database:
         finally:
             if conn:
                 conn.close()
+
+    def _split_lead_location(self, location):
+        """Parses stored lead location strings such as 'dentist:London, UK'."""
+        if not isinstance(location, str) or not location.strip():
+            return None, None
+
+        if ":" in location:
+            business_type, search_location = location.split(":", 1)
+            business_type = business_type.strip() or None
+            search_location = search_location.strip() or None
+            return business_type, search_location
+
+        return None, location.strip() or None
+
+    def _is_blank(self, value):
+        return value is None or str(value).strip() == ""
+
+    def _stage_rank(self, stage):
+        ranks = {
+            "review": 1,
+            "ready_for_email": 2,
+            "drafted": 3,
+            "approved": 4,
+            "contacted": 5,
+            "replied": 6,
+            "closed": 7,
+            "skipped": 2,
+            "do_not_contact": 5,
+        }
+        return ranks.get(stage or "", 0)
+
+    def _lead_status_rank(self, status):
+        ranks = {
+            "new": 1,
+            "reviewed": 2,
+            "ready": 3,
+            "contacted": 4,
+            "do_not_contact": 5,
+        }
+        return ranks.get(status or "", 0)
+
+    def _lead_flag_rank(self, flag):
+        ranks = {
+            "needs_review": 1,
+            "bad": 2,
+            "good": 3,
+            "hot": 4,
+        }
+        return ranks.get(flag or "", 0)
+
+    def _scrape_status_rank(self, status):
+        ranks = {
+            "pending": 1,
+            "skipped": 2,
+            "failed": 3,
+            "scraped": 4,
+        }
+        return ranks.get(status or "", 0)
+
+    def _record_lead_discovery_with_cursor(self, cursor, lead_id, execution_id, place_id, location):
+        business_type, search_location = self._split_lead_location(location)
+        cursor.execute("""
+            INSERT INTO lead_discoveries (
+                lead_id, execution_id, place_id, location, business_type, search_location, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(lead_id, execution_id) DO UPDATE SET
+                place_id = excluded.place_id,
+                location = COALESCE(excluded.location, lead_discoveries.location),
+                business_type = COALESCE(excluded.business_type, lead_discoveries.business_type),
+                search_location = COALESCE(excluded.search_location, lead_discoveries.search_location),
+                updated_at = CURRENT_TIMESTAMP
+        """, (lead_id, execution_id, place_id, location, business_type, search_location))
+
+    def _lead_uniqueness_is_global(self, cursor):
+        cursor.execute("PRAGMA index_list(leads)")
+        for index in cursor.fetchall():
+            is_unique = index["unique"] if "unique" in index.keys() else index[2]
+            index_name = index["name"] if "name" in index.keys() else index[1]
+            if not is_unique:
+                continue
+            cursor.execute(f"PRAGMA index_info({index_name})")
+            columns = [row["name"] if "name" in row.keys() else row[2] for row in cursor.fetchall()]
+            if columns == ["place_id"]:
+                return True
+        return False
+
+    def _canonical_lead_sort_key(self, lead, campaign_counts):
+        valuable_fields = [
+            "emails",
+            "website_summary",
+            "notes",
+            "website",
+            "phone",
+            "address",
+        ]
+        valuable_count = sum(0 if self._is_blank(lead[field]) else 1 for field in valuable_fields)
+        return (
+            1 if campaign_counts.get(lead["lead_id"], 0) else 0,
+            self._lead_status_rank(lead["lead_status"]),
+            valuable_count,
+            1 if lead["status"] == "scraped" else 0,
+            -lead["lead_id"],
+        )
+
+    def _merge_campaign_lead_rows(self, cursor, canonical_id, duplicate_id):
+        cursor.execute("""
+            SELECT *
+            FROM campaign_leads
+            WHERE lead_id = ?
+        """, (duplicate_id,))
+        duplicate_memberships = cursor.fetchall()
+
+        for duplicate in duplicate_memberships:
+            cursor.execute("""
+                SELECT *
+                FROM campaign_leads
+                WHERE campaign_id = ? AND lead_id = ?
+            """, (duplicate["campaign_id"], canonical_id))
+            canonical = cursor.fetchone()
+
+            if not canonical:
+                cursor.execute("""
+                    UPDATE campaign_leads
+                    SET lead_id = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE campaign_lead_id = ?
+                """, (canonical_id, duplicate["campaign_lead_id"]))
+                continue
+
+            updates = {}
+            if self._stage_rank(duplicate["stage"]) > self._stage_rank(canonical["stage"]):
+                updates["stage"] = duplicate["stage"]
+
+            for field in ["priority", "email_draft", "final_email", "campaign_notes", "contacted_at"]:
+                if self._is_blank(canonical[field]) and not self._is_blank(duplicate[field]):
+                    updates[field] = duplicate[field]
+
+            if updates:
+                set_clause = ", ".join(f"{field} = ?" for field in updates)
+                params = list(updates.values()) + [canonical["campaign_lead_id"]]
+                cursor.execute(f"""
+                    UPDATE campaign_leads
+                    SET {set_clause}, updated_at = CURRENT_TIMESTAMP
+                    WHERE campaign_lead_id = ?
+                """, params)
+
+            cursor.execute("""
+                DELETE FROM campaign_leads
+                WHERE campaign_lead_id = ?
+            """, (duplicate["campaign_lead_id"],))
+
+    def _merge_lead_email_rows(self, cursor, canonical_id, duplicate_id):
+        cursor.execute("""
+            SELECT *
+            FROM lead_emails
+            WHERE lead_id = ?
+            ORDER BY is_primary DESC, email_id ASC
+        """, (duplicate_id,))
+        duplicate_emails = cursor.fetchall()
+
+        cursor.execute("""
+            SELECT COUNT(*) AS count
+            FROM lead_emails
+            WHERE lead_id = ? AND is_primary = TRUE
+        """, (canonical_id,))
+        canonical_has_primary = (cursor.fetchone()["count"] or 0) > 0
+
+        for duplicate in duplicate_emails:
+            cursor.execute("""
+                SELECT *
+                FROM lead_emails
+                WHERE lead_id = ? AND email = ?
+            """, (canonical_id, duplicate["email"]))
+            existing = cursor.fetchone()
+
+            if not existing:
+                is_primary = bool(duplicate["is_primary"]) and not canonical_has_primary
+                cursor.execute("""
+                    INSERT INTO lead_emails (
+                        lead_id, email, category, status, is_primary, notes, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """, (
+                    canonical_id,
+                    duplicate["email"],
+                    duplicate["category"],
+                    duplicate["status"],
+                    is_primary,
+                    duplicate["notes"],
+                    duplicate["created_at"],
+                ))
+                canonical_has_primary = canonical_has_primary or is_primary
+                continue
+
+            updates = {}
+            if existing["category"] in (None, "", "unknown") and duplicate["category"] not in (None, "", "unknown"):
+                updates["category"] = duplicate["category"]
+            if existing["status"] in (None, "", "new") and duplicate["status"] not in (None, "", "new"):
+                updates["status"] = duplicate["status"]
+            if self._is_blank(existing["notes"]) and not self._is_blank(duplicate["notes"]):
+                updates["notes"] = duplicate["notes"]
+            if bool(duplicate["is_primary"]) and not canonical_has_primary:
+                updates["is_primary"] = True
+                canonical_has_primary = True
+
+            if updates:
+                set_clause = ", ".join(f"{field} = ?" for field in updates)
+                params = list(updates.values()) + [existing["email_id"]]
+                cursor.execute(f"""
+                    UPDATE lead_emails
+                    SET {set_clause}, updated_at = CURRENT_TIMESTAMP
+                    WHERE email_id = ?
+                """, params)
+
+        cursor.execute("DELETE FROM lead_emails WHERE lead_id = ?", (duplicate_id,))
+
+    def _merge_duplicate_lead_into_canonical(self, cursor, canonical, duplicate):
+        canonical_id = canonical["lead_id"]
+        duplicate_id = duplicate["lead_id"]
+
+        self._record_lead_discovery_with_cursor(
+            cursor,
+            canonical_id,
+            duplicate["execution_id"],
+            duplicate["place_id"],
+            duplicate["location"],
+        )
+        self._merge_lead_email_rows(cursor, canonical_id, duplicate_id)
+        self._merge_campaign_lead_rows(cursor, canonical_id, duplicate_id)
+
+        updates = {}
+        fill_fields = [
+            "location",
+            "name",
+            "address",
+            "phone",
+            "website",
+            "emails",
+            "notes",
+            "website_summary",
+            "summary_source_url",
+            "summary_status",
+            "summary_updated_at",
+        ]
+        for field in fill_fields:
+            if self._is_blank(canonical[field]) and not self._is_blank(duplicate[field]):
+                updates[field] = duplicate[field]
+
+        if self._scrape_status_rank(duplicate["status"]) > self._scrape_status_rank(canonical["status"]):
+            updates["status"] = duplicate["status"]
+        if self._lead_status_rank(duplicate["lead_status"]) > self._lead_status_rank(canonical["lead_status"]):
+            updates["lead_status"] = duplicate["lead_status"]
+        if self._lead_flag_rank(duplicate["lead_flag"]) > self._lead_flag_rank(canonical["lead_flag"]):
+            updates["lead_flag"] = duplicate["lead_flag"]
+        if not self._is_blank(canonical["notes"]) and not self._is_blank(duplicate["notes"]) and duplicate["notes"] not in canonical["notes"]:
+            updates["notes"] = f"{canonical['notes']}\n\n{duplicate['notes']}"
+
+        if updates:
+            set_clause = ", ".join(f"{field} = ?" for field in updates)
+            params = list(updates.values()) + [canonical_id]
+            cursor.execute(f"""
+                UPDATE leads
+                SET {set_clause}, updated_at = CURRENT_TIMESTAMP
+                WHERE lead_id = ?
+            """, params)
+            canonical.update(updates)
+
+        cursor.execute("DELETE FROM leads WHERE lead_id = ?", (duplicate_id,))
+
+    def _sync_lead_emails_string_with_cursor(self, cursor, lead_id):
+        cursor.execute("""
+            SELECT email
+            FROM lead_emails
+            WHERE lead_id = ?
+              AND status NOT IN ('invalid', 'do_not_use')
+            ORDER BY is_primary DESC, email_id ASC
+        """, (lead_id,))
+        emails = [row["email"] for row in cursor.fetchall()]
+        emails_str = ",".join(emails) if emails else None
+        cursor.execute("""
+            UPDATE leads
+            SET emails = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE lead_id = ?
+        """, (emails_str, lead_id))
+
+    def _backfill_lead_emails_from_string_with_cursor(self, cursor, lead_id, emails):
+        parsed_emails = [
+            email.strip()
+            for email in str(emails or "").split(",")
+            if email.strip()
+        ]
+        for index, email in enumerate(parsed_emails):
+            cursor.execute("""
+                INSERT OR IGNORE INTO lead_emails (
+                    lead_id, email, category, status, is_primary
+                ) VALUES (?, ?, 'unknown', 'new', ?)
+            """, (lead_id, email, index == 0))
+
+    def _migrate_global_lead_uniqueness(self, cursor):
+        """Backfills discovery history and enforces one canonical lead per place_id."""
+        cursor.execute("""
+            SELECT l.*, COUNT(cl.campaign_lead_id) AS campaign_count
+            FROM leads l
+            LEFT JOIN campaign_leads cl ON l.lead_id = cl.lead_id
+            GROUP BY l.lead_id
+            ORDER BY l.created_at ASC, l.lead_id ASC
+        """)
+        leads = [dict(row) for row in cursor.fetchall()]
+        if not leads:
+            if not self._lead_uniqueness_is_global(cursor):
+                cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_unique_place_id ON leads(place_id)")
+            return
+
+        for lead in leads:
+            self._backfill_lead_emails_from_string_with_cursor(cursor, lead["lead_id"], lead.get("emails"))
+            self._record_lead_discovery_with_cursor(
+                cursor,
+                lead["lead_id"],
+                lead["execution_id"],
+                lead["place_id"],
+                lead["location"],
+            )
+
+        grouped = {}
+        for lead in leads:
+            grouped.setdefault(lead["place_id"], []).append(lead)
+
+        campaign_counts = {lead["lead_id"]: lead.get("campaign_count") or 0 for lead in leads}
+        canonical_ids = set()
+        for place_id, group in grouped.items():
+            if len(group) == 1:
+                canonical_ids.add(group[0]["lead_id"])
+                continue
+
+            canonical = max(group, key=lambda item: self._canonical_lead_sort_key(item, campaign_counts))
+            canonical_ids.add(canonical["lead_id"])
+            for duplicate in group:
+                if duplicate["lead_id"] == canonical["lead_id"]:
+                    continue
+                self._merge_duplicate_lead_into_canonical(cursor, canonical, duplicate)
+
+            self._sync_lead_emails_string_with_cursor(cursor, canonical["lead_id"])
+
+        for lead_id in canonical_ids:
+            self._sync_lead_emails_string_with_cursor(cursor, lead_id)
+
+        cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_unique_place_id ON leads(place_id)")
 
     def __enter__(self):
         """Opens a database connection and returns the instance.
@@ -669,7 +1034,15 @@ class Database:
             params.append(status)
 
         if job_id:
-            query += " AND j.job_id = ?"
+            query += """
+                AND EXISTS (
+                    SELECT 1
+                    FROM lead_discoveries ld_job
+                    JOIN job_executions j_job ON ld_job.execution_id = j_job.execution_id
+                    WHERE ld_job.lead_id = l.lead_id
+                      AND j_job.job_id = ?
+                )
+            """
             params.append(job_id)
 
         if lead_flag:
@@ -681,12 +1054,33 @@ class Database:
             params.append(lead_status)
 
         if business_type:
-            query += " AND l.location LIKE ?"
-            params.append(f"{business_type}:%")
+            query += """
+                AND EXISTS (
+                    SELECT 1
+                    FROM lead_discoveries ld_business
+                    WHERE ld_business.lead_id = l.lead_id
+                      AND (
+                          ld_business.business_type = ?
+                          OR ld_business.location LIKE ?
+                      )
+                )
+            """
+            params.extend([business_type, f"{business_type}:%"])
 
         if search_location:
-            query += " AND (l.location = ? OR l.location LIKE ?)"
-            params.extend([search_location, f"%:{search_location}"])
+            query += """
+                AND EXISTS (
+                    SELECT 1
+                    FROM lead_discoveries ld_location
+                    WHERE ld_location.lead_id = l.lead_id
+                      AND (
+                          ld_location.search_location = ?
+                          OR ld_location.location = ?
+                          OR ld_location.location LIKE ?
+                      )
+                )
+            """
+            params.extend([search_location, search_location, f"%:{search_location}"])
 
         if has_email is True:
             query += " AND l.emails IS NOT NULL AND TRIM(l.emails) != ''"
@@ -743,7 +1137,25 @@ class Database:
                     l.updated_at,
                     j.job_id,
                     j.step_id,
-                    j.status AS job_status
+                    j.status AS job_status,
+                    (
+                        SELECT COUNT(*)
+                        FROM lead_discoveries ld_count
+                        WHERE ld_count.lead_id = l.lead_id
+                    ) AS discovery_count,
+                    (
+                        SELECT MAX(ld_last.updated_at)
+                        FROM lead_discoveries ld_last
+                        WHERE ld_last.lead_id = l.lead_id
+                    ) AS last_discovered_at,
+                    (
+                        SELECT j_last.job_id
+                        FROM lead_discoveries ld_last_job
+                        JOIN job_executions j_last ON ld_last_job.execution_id = j_last.execution_id
+                        WHERE ld_last_job.lead_id = l.lead_id
+                        ORDER BY ld_last_job.updated_at DESC, ld_last_job.discovery_id DESC
+                        LIMIT 1
+                    ) AS last_discovery_job_id
                 FROM leads l
                 JOIN job_executions j ON l.execution_id = j.execution_id
                 WHERE 1 = 1
@@ -791,30 +1203,29 @@ class Database:
         return None, None
 
     def list_lead_filter_options(self):
-        """Returns distinct business type and search location values parsed from leads."""
+        """Returns distinct business type and search location values parsed from discoveries."""
         try:
             self.cursor.execute("""
-                SELECT location
-                FROM leads
-                WHERE location IS NOT NULL AND TRIM(location) != ''
+                SELECT location, business_type, search_location
+                FROM lead_discoveries
+                WHERE (
+                    location IS NOT NULL AND TRIM(location) != ''
+                ) OR (
+                    business_type IS NOT NULL AND TRIM(business_type) != ''
+                ) OR (
+                    search_location IS NOT NULL AND TRIM(search_location) != ''
+                )
             """)
             business_type_counts = {}
             search_location_counts = {}
             pair_counts = {}
 
             for row in self.cursor.fetchall():
+                business_type = row["business_type"]
+                search_location = row["search_location"]
                 location = row["location"]
-                if not isinstance(location, str):
-                    continue
-
-                business_type = None
-                search_location = None
-                if ":" in location:
-                    business_type, search_location = location.split(":", 1)
-                    business_type = business_type.strip()
-                    search_location = search_location.strip()
-                else:
-                    search_location = location.strip()
+                if self._is_blank(business_type) and self._is_blank(search_location):
+                    business_type, search_location = self._split_lead_location(location)
 
                 if business_type == "":
                     business_type = None
@@ -1276,9 +1687,9 @@ class Database:
     def insert_lead(self, execution_id, place_id, location=None, name=None, address=None, phone=None, website=None, emails=None):
         """Inserts a new lead record into the database.
 
-        Note: This method will fail if a lead with the same execution_id and place_id
-        already exists, due to UNIQUE constraints. Use `update_lead` for
-        modifying existing records.
+        Note: This method will fail if a lead with the same place_id already
+        exists, due to global lead uniqueness. Use `update_lead` for modifying
+        existing records.
 
         Args:
             execution_id (int): The identifier of the job execution that generated this lead.
@@ -1296,10 +1707,78 @@ class Database:
                     execution_id, place_id, location, name, address, phone, website, emails, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """, (execution_id, place_id, location, name, address, phone, website, emails))
+            lead_id = self.cursor.lastrowid
+            self._record_lead_discovery_with_cursor(self.cursor, lead_id, execution_id, place_id, location)
+            if emails:
+                self._backfill_lead_emails_from_string(lead_id, emails)
             logging.info(f"Inserted lead for execution {execution_id}, place {place_id}")
         except sqlite3.Error as e:
             logging.error(f"Failed to insert lead for execution {execution_id}, place {place_id}: {e}")
             raise
+
+    def get_lead_by_place_id(self, place_id):
+        """Returns one canonical lead by Google Places place_id."""
+        self.cursor.execute("""
+            SELECT *
+            FROM leads
+            WHERE place_id = ?
+        """, (place_id,))
+        row = self.cursor.fetchone()
+        return dict(row) if row else None
+
+    def record_lead_discovery(self, lead_id, execution_id, place_id, location=None):
+        """Records that a scrape job found an existing canonical lead."""
+        self._record_lead_discovery_with_cursor(self.cursor, lead_id, execution_id, place_id, location)
+
+    def upsert_google_places_lead(self, execution_id, place_id, location=None, name=None, address=None, phone=None, website=None):
+        """Creates or refreshes a canonical Google Places lead and records discovery.
+
+        Google-owned fields are refreshed only when the new value is non-empty.
+        Manual/enrichment fields such as emails, review status, notes, campaigns,
+        and website summaries are not overwritten here.
+        """
+        existing = self.get_lead_by_place_id(place_id)
+        if not existing:
+            self.insert_lead(
+                execution_id=execution_id,
+                place_id=place_id,
+                location=location,
+                name=name,
+                address=address,
+                phone=phone,
+                website=website,
+            )
+            lead = self.get_lead_by_place_id(place_id)
+            if lead:
+                lead["storage_status"] = "created"
+            return lead
+
+        set_clauses = []
+        params = []
+        for column, value in {
+            "location": location,
+            "name": name,
+            "address": address,
+            "phone": phone,
+            "website": website,
+        }.items():
+            if not self._is_blank(value):
+                set_clauses.append(f"{column} = ?")
+                params.append(value)
+
+        if set_clauses:
+            set_clauses.append("updated_at = CURRENT_TIMESTAMP")
+            params.append(existing["lead_id"])
+            self.cursor.execute(
+                f"UPDATE leads SET {', '.join(set_clauses)} WHERE lead_id = ?",
+                params,
+            )
+
+        self.record_lead_discovery(existing["lead_id"], execution_id, place_id, location)
+        lead = self.get_lead_by_place_id(place_id)
+        if lead:
+            lead["storage_status"] = "updated"
+        return lead
 
     def update_lead(self, place_id, execution_id=None, location=None, name=None, address=None, phone=None, website=None, emails=None, status=None, website_summary=None, summary_source_url=None, summary_status=None):
         """Updates an existing lead record in the database.

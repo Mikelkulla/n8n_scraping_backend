@@ -39,6 +39,7 @@ class TestDatabase:
             tables = [row[0] for row in cursor.fetchall()]
             assert 'job_executions' in tables
             assert 'leads' in tables
+            assert 'lead_discoveries' in tables
             assert 'campaigns' in tables
             assert 'campaign_leads' in tables
 
@@ -67,6 +68,13 @@ class TestDatabase:
             campaign_lead_columns = [row[1] for row in cursor.fetchall()]
             assert 'campaign_lead_id' in campaign_lead_columns
             assert 'stage' in campaign_lead_columns
+
+            cursor.execute("PRAGMA table_info(lead_discoveries);")
+            discovery_columns = [row[1] for row in cursor.fetchall()]
+            assert 'lead_id' in discovery_columns
+            assert 'execution_id' in discovery_columns
+            assert 'business_type' in discovery_columns
+            assert 'search_location' in discovery_columns
 
     def test_init_db_adds_summary_columns_to_existing_leads_table(self, tmp_path):
         """Test that initialization migrates existing databases with summary columns."""
@@ -265,18 +273,21 @@ class TestDatabase:
             assert updated_lead["summary_updated_at"] is not None
 
     def test_insert_duplicate_lead_fails(self, temp_db):
-        """Test that inserting a lead with a duplicate key fails."""
+        """Test that inserting a duplicate place_id fails globally."""
         db, db_path = temp_db
         with db as conn:
             conn.insert_job_execution("job1", "step1", "input1", status="running")
+            conn.insert_job_execution("job2", "step1", "input2", status="running")
             execution = conn.get_job_execution("job1", "step1")
+            second_execution = conn.get_job_execution("job2", "step1")
             execution_id = execution['execution_id']
+            second_execution_id = second_execution['execution_id']
             conn.insert_lead(execution_id, "place1", name="Original", website="example.com")
 
-        # Attempt to insert the same lead again, which should fail due to UNIQUE constraint
+        # Attempt to insert the same place from a different job.
         with pytest.raises(sqlite3.IntegrityError):
             with Database(db_path=db_path) as conn:
-                conn.insert_lead(execution_id, "place1", name="Duplicate", website="example.com")
+                conn.insert_lead(second_execution_id, "place1", name="Duplicate", website="example.com")
 
         # Verify that the second insert did not overwrite the original
         db_checker = Database(db_path=db_path)
@@ -284,6 +295,215 @@ class TestDatabase:
             leads = checker.get_leads()
             assert len(leads) == 1
             assert leads[0]['name'] == "Original"
+
+    def test_migration_merges_duplicate_place_ids(self, tmp_path):
+        """Test existing duplicate leads are merged into one canonical lead."""
+        db_path = tmp_path / "duplicates.db"
+        conn = sqlite3.connect(db_path)
+        conn.executescript("""
+            CREATE TABLE job_executions (
+                execution_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL,
+                step_id TEXT NOT NULL,
+                input TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(job_id, step_id)
+            );
+            CREATE TABLE leads (
+                lead_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                execution_id INTEGER NOT NULL,
+                place_id TEXT NOT NULL,
+                location TEXT,
+                name TEXT,
+                address TEXT,
+                phone TEXT,
+                website TEXT,
+                emails TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                status TEXT,
+                lead_flag TEXT DEFAULT 'needs_review',
+                lead_status TEXT DEFAULT 'new',
+                notes TEXT,
+                website_summary TEXT,
+                summary_source_url TEXT,
+                summary_status TEXT,
+                summary_updated_at TIMESTAMP,
+                UNIQUE(execution_id, place_id)
+            );
+            CREATE TABLE campaigns (
+                campaign_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                business_type TEXT,
+                search_location TEXT,
+                filters_json TEXT,
+                status TEXT DEFAULT 'draft',
+                notes TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE campaign_leads (
+                campaign_lead_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                campaign_id INTEGER NOT NULL,
+                lead_id INTEGER NOT NULL,
+                stage TEXT NOT NULL DEFAULT 'review',
+                priority TEXT,
+                email_draft TEXT,
+                final_email TEXT,
+                campaign_notes TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                contacted_at TIMESTAMP,
+                UNIQUE(campaign_id, lead_id)
+            );
+            CREATE TABLE lead_emails (
+                email_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                lead_id INTEGER NOT NULL,
+                email TEXT NOT NULL,
+                category TEXT DEFAULT 'unknown',
+                status TEXT DEFAULT 'new',
+                is_primary BOOLEAN DEFAULT FALSE,
+                notes TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(lead_id, email)
+            );
+        """)
+        conn.execute("INSERT INTO job_executions (job_id, step_id, input, status) VALUES ('job1', 'google_maps_scrape', 'dentist:London', 'completed')")
+        conn.execute("INSERT INTO job_executions (job_id, step_id, input, status) VALUES ('job2', 'google_maps_scrape', 'dentist:London', 'completed')")
+        conn.execute("""
+            INSERT INTO leads (execution_id, place_id, location, name, website, emails, status, lead_status, notes)
+            VALUES (1, 'same-place', 'dentist:London', 'Original', 'https://old.example', 'old@example.com', 'pending', 'new', NULL)
+        """)
+        conn.execute("""
+            INSERT INTO leads (execution_id, place_id, location, name, phone, emails, status, lead_status, notes, website_summary)
+            VALUES (2, 'same-place', 'dentist:London', 'Reviewed', '+123', 'new@example.com', 'scraped', 'ready', 'Keep this note', 'Useful context')
+        """)
+        conn.execute("INSERT INTO campaigns (name) VALUES ('Campaign')")
+        conn.execute("INSERT INTO campaign_leads (campaign_id, lead_id, stage, final_email) VALUES (1, 2, 'approved', 'Approved copy')")
+        conn.execute("INSERT INTO lead_emails (lead_id, email, category, status, is_primary) VALUES (1, 'old@example.com', 'info', 'valid', 1)")
+        conn.execute("INSERT INTO lead_emails (lead_id, email, category, status, is_primary) VALUES (2, 'new@example.com', 'sales', 'valid', 1)")
+        conn.commit()
+        conn.close()
+
+        Database(db_path=str(db_path))
+
+        with Database(db_path=str(db_path)) as migrated:
+            leads = migrated.list_leads()
+            assert len(leads) == 1
+            lead = leads[0]
+            assert lead["place_id"] == "same-place"
+            assert lead["lead_status"] == "ready"
+            assert lead["status"] == "scraped"
+            assert lead["notes"] == "Keep this note"
+            assert lead["website_summary"] == "Useful context"
+            assert lead["campaign_count"] == 1
+            assert lead["discovery_count"] == 2
+
+            emails = migrated.list_lead_emails(lead["lead_id"])
+            assert sorted(email["email"] for email in emails) == ["new@example.com", "old@example.com"]
+
+            campaign_leads = migrated.list_campaign_leads(1)
+            assert len(campaign_leads) == 1
+            assert campaign_leads[0]["lead_id"] == lead["lead_id"]
+            assert campaign_leads[0]["stage"] == "approved"
+            assert campaign_leads[0]["final_email"] == "Approved copy"
+
+            migrated.cursor.execute("SELECT COUNT(*) AS count FROM lead_discoveries WHERE lead_id = ?", (lead["lead_id"],))
+            assert migrated.cursor.fetchone()["count"] == 2
+
+            with pytest.raises(sqlite3.IntegrityError):
+                migrated.insert_lead(lead["execution_id"], "same-place", name="Still duplicate")
+
+    def test_google_places_upsert_updates_source_fields_and_preserves_manual_fields(self, temp_db):
+        """Test rediscovery updates canonical source fields without overwriting manual data."""
+        db, _ = temp_db
+        with db as conn:
+            conn.insert_job_execution("job1", "google_maps_scrape", "dentist:London", status="completed")
+            conn.insert_job_execution("job2", "google_maps_scrape", "dentist:Paris", status="completed")
+            first_execution = conn.get_job_execution("job1", "google_maps_scrape")
+            second_execution = conn.get_job_execution("job2", "google_maps_scrape")
+
+            created = conn.upsert_google_places_lead(
+                first_execution["execution_id"],
+                "place1",
+                location="dentist:London",
+                name="Original Name",
+                address="Old Address",
+                phone="+111",
+                website="https://old.example",
+            )
+            conn.update_lead(
+                "place1",
+                execution_id=first_execution["execution_id"],
+                emails="manual@example.com",
+                status="scraped",
+                website_summary="Manual context",
+                summary_status="captured",
+            )
+            updated = conn.upsert_google_places_lead(
+                second_execution["execution_id"],
+                "place1",
+                location="dentist:Paris",
+                name="Fresh Name",
+                address="Fresh Address",
+                phone="+222",
+                website="https://fresh.example",
+            )
+
+            assert created["storage_status"] == "created"
+            assert updated["storage_status"] == "updated"
+            leads = conn.list_leads()
+            assert len(leads) == 1
+            lead = leads[0]
+            assert lead["name"] == "Fresh Name"
+            assert lead["address"] == "Fresh Address"
+            assert lead["phone"] == "+222"
+            assert lead["website"] == "https://fresh.example"
+            assert lead["emails"] == "manual@example.com"
+            assert lead["status"] == "scraped"
+            assert lead["website_summary"] == "Manual context"
+            assert lead["discovery_count"] == 2
+
+    def test_discovery_filters_include_rediscovered_canonical_leads(self, temp_db):
+        """Test job and location filters use discovery history, not only lead.execution_id."""
+        db, _ = temp_db
+        with db as conn:
+            conn.insert_job_execution("job1", "google_maps_scrape", "dentist:London", status="completed")
+            conn.insert_job_execution("job2", "google_maps_scrape", "dentist:Paris", status="completed")
+            first_execution = conn.get_job_execution("job1", "google_maps_scrape")
+            second_execution = conn.get_job_execution("job2", "google_maps_scrape")
+            conn.upsert_google_places_lead(
+                first_execution["execution_id"],
+                "place1",
+                location="dentist:London",
+                name="Clinic",
+                website="https://clinic.example",
+            )
+            conn.upsert_google_places_lead(
+                second_execution["execution_id"],
+                "place1",
+                location="dentist:Paris",
+                name="Clinic Paris",
+                website="https://clinic.example",
+            )
+
+            by_second_job = conn.list_leads(job_id="job2")
+            assert len(by_second_job) == 1
+            assert by_second_job[0]["place_id"] == "place1"
+            assert by_second_job[0]["job_id"] == "job1"
+            assert by_second_job[0]["last_discovery_job_id"] == "job2"
+
+            by_location = conn.list_leads(business_type="dentist", search_location="Paris")
+            assert len(by_location) == 1
+            assert by_location[0]["place_id"] == "place1"
+
+            options = conn.list_lead_filter_options()
+            assert {"value": "dentist", "count": 2} in options["business_types"]
+            assert {"value": "London", "count": 1} in options["search_locations"]
+            assert {"value": "Paris", "count": 1} in options["search_locations"]
 
     def test_create_campaign_from_lead_filters(self, temp_db):
         """Test creating a campaign from existing lead filters."""
