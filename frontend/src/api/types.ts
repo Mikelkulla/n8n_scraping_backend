@@ -370,3 +370,106 @@ export type UpdateCampaignLeadRequest = {
 export type CampaignLeadResponse = {
   campaign_lead: CampaignLead;
 };
+
+export type AiEmailProvider = "openai" | "anthropic";
+
+export type EmailSettings = {
+  provider: AiEmailProvider | string;
+  model: string;
+  system_prompt: string;
+  user_prompt: string;
+  api_key_configured: boolean;
+};
+
+export type EmailSettingsResponse = {
+  settings: EmailSettings;
+};
+
+export type UpdateEmailSettingsRequest = {
+  provider?: AiEmailProvider;
+  model?: string;
+  system_prompt?: string;
+  user_prompt?: string;
+};
+
+export type BusinessTypeEmailRule = {
+  business_type: string;
+  business_description?: string | null;
+  pain_point?: string | null;
+  offer_angle?: string | null;
+  extra_instructions?: string | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type BusinessTypeEmailRulesResponse = {
+  count: number;
+  rules: BusinessTypeEmailRule[];
+};
+
+export type BusinessTypeEmailRuleResponse = {
+  rule: BusinessTypeEmailRule;
+};
+
+export type UpdateBusinessTypeEmailRuleRequest = {
+  business_description?: string;
+  pain_point?: string;
+  offer_angle?: string;
+  extra_instructions?: string;
+};
+
+export type GenerateCampaignEmailsRequest = {
+  stage?: string;
+  search?: string;
+  limit?: number;
+};
+
+export type GenerateCampaignEmailsResponse = {
+  generated_count: number;
+  skipped_count: number;
+  error_count: number;
+  generated: CampaignLead[];
+  skipped: Array<{ campaign_lead_id?: number; reason: string }>;
+  errors: Array<{ campaign_lead_id?: number; error: string }>;
+};
+
+export type EmailCategoryRule = {
+  rule_id: number;
+  pattern: string;
+  match_type: "local_part_exact" | string;
+  category: string;
+  is_active: boolean | number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ListEmailCategoryRulesResponse = {
+  count: number;
+  categories: string[];
+  rules: EmailCategoryRule[];
+};
+
+export type EmailCategoryRuleResponse = {
+  rule: EmailCategoryRule;
+};
+
+export type UpdateEmailCategoryRuleRequest = {
+  category: string;
+  is_active?: boolean;
+};
+
+export type UnknownEmailLocalPart = {
+  local_part: string;
+  count: number;
+  example_email: string;
+};
+
+export type UnknownEmailLocalPartsResponse = {
+  count: number;
+  local_parts: UnknownEmailLocalPart[];
+};
+
+export type ApplyEmailCategoryRulesResponse = {
+  updated_count: number;
+  unknown_local_parts: UnknownEmailLocalPart[];
+};

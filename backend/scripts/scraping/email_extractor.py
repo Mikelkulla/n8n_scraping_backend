@@ -1,6 +1,7 @@
 import re
 from selenium.webdriver.common.by import By
 import logging
+from .html_context_cleaner import html_to_context_text
 
 EMAIL_REGEX = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
 EXAMPLE_DOMAINS = {"example.com", "example.org", "example.net", "test.com", "sample.com"}
@@ -41,6 +42,7 @@ def extract_page_content(driver, url):
     logging.info(f"Scraping page content: {url}")
     emails = set()
     body = ""
+    html = ""
     
     try:
         driver.get(url)
@@ -52,6 +54,12 @@ def extract_page_content(driver, url):
             emails.update(emails_from_text)
         except Exception as e:
             logging.error(f"Error getting page body text: {e}")
+
+        try:
+            raw_html = driver.page_source
+            html = raw_html if isinstance(raw_html, (str, bytes)) else ""
+        except Exception as e:
+            logging.error(f"Error getting page HTML: {e}")
         
         # 2. Extract from mailto links
         try:
@@ -71,7 +79,11 @@ def extract_page_content(driver, url):
     except Exception as e:
         logging.error(f"Error scraping page {url}: {e}")
     
-    return {"emails": emails, "body_text": body}
+    return {
+        "emails": emails,
+        "body_text": body,
+        "context_text": html_to_context_text(html) if html else body,
+    }
 
 def extract_emails_from_page(driver, url):
     """Extracts email addresses from a given web page.

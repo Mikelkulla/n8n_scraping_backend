@@ -9,5 +9,9 @@ export const queryKeys = {
   campaigns: ["campaigns"] as const,
   campaign: (campaignId: number) => ["campaign", campaignId] as const,
   campaignLeads: (campaignId: number, params: Record<string, unknown>) => ["campaign-leads", campaignId, params] as const,
+  emailSettings: ["email-settings"] as const,
+  businessTypeEmailRules: ["business-type-email-rules"] as const,
+  emailCategoryRules: ["email-category-rules"] as const,
+  unknownEmailLocalParts: ["unknown-email-local-parts"] as const,
   exportLeads: ["export-leads"] as const,
 };

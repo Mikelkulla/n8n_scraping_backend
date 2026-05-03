@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createCampaign,
   downloadCampaignCsv,
+  generateCampaignEmails,
+  generateCampaignLeadEmail,
   getCampaign,
   listCampaignLeads,
   listCampaigns,
@@ -10,6 +12,7 @@ import {
 } from "../api";
 import type {
   CreateCampaignRequest,
+  GenerateCampaignEmailsRequest,
   ListCampaignLeadsParams,
   UpdateCampaignLeadRequest,
   UpdateCampaignRequest,
@@ -70,6 +73,34 @@ export function useUpdateCampaignLead() {
   return useMutation({
     mutationFn: ({ campaignLeadId, campaignId, payload }: { campaignLeadId: number; campaignId: number; payload: UpdateCampaignLeadRequest }) =>
       updateCampaignLead(campaignLeadId, payload),
+    onSuccess: (_, variables) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.campaigns });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.campaign(variables.campaignId) });
+      void queryClient.invalidateQueries({ queryKey: ["campaign-leads", variables.campaignId] });
+    },
+  });
+}
+
+export function useGenerateCampaignLeadEmail() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ campaignLeadId }: { campaignLeadId: number; campaignId: number }) =>
+      generateCampaignLeadEmail(campaignLeadId),
+    onSuccess: (_, variables) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.campaigns });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.campaign(variables.campaignId) });
+      void queryClient.invalidateQueries({ queryKey: ["campaign-leads", variables.campaignId] });
+    },
+  });
+}
+
+export function useGenerateCampaignEmails() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ campaignId, payload }: { campaignId: number; payload: GenerateCampaignEmailsRequest }) =>
+      generateCampaignEmails(campaignId, payload),
     onSuccess: (_, variables) => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.campaigns });
       void queryClient.invalidateQueries({ queryKey: queryKeys.campaign(variables.campaignId) });

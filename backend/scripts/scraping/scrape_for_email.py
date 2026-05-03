@@ -76,19 +76,20 @@ def clean_summary_text(text, max_chars=1400):
     cleaned_lines = []
     for raw_line in text.splitlines():
         line = re.sub(r"\s+", " ", raw_line).strip()
-        if len(line) < 25:
-            continue
         lowered = line.lower()
         if any(pattern in lowered for pattern in SUMMARY_DROP_PATTERNS):
             continue
-        if len(line.split()) < 5:
+        if line.startswith(("# ", "## ", "### ", "#### ", "- ")):
+            cleaned_lines.append(line)
+            continue
+        if len(line) < 25 or len(line.split()) < 5:
             continue
         cleaned_lines.append(line)
 
-    text = " ".join(cleaned_lines)
-    text = re.sub(r"\s+", " ", text).strip()
+    text = "\n".join(cleaned_lines)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
     if len(text) > max_chars:
-        truncated = text[:max_chars].rsplit(" ", 1)[0].strip()
+        truncated = text[:max_chars].rsplit("\n", 1)[0].strip()
         return truncated or text[:max_chars].strip()
     return text
 
@@ -196,7 +197,7 @@ class EmailScraper:
 
         try:
             content = scrape_page_content(self.driver, self.base_url)
-            summary = clean_summary_text(content.get("body_text", ""))
+            summary = clean_summary_text(content.get("context_text") or content.get("body_text", ""))
             if summary:
                 self.website_summary = summary
                 self.summary_source_url = self.base_url

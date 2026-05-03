@@ -1,0 +1,271 @@
+{
+  "name": "Business Finder Chat Bot",
+  "nodes": [
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "60237c85-0e01-4e65-a9f3-7bfbeaee0935",
+      "name": "Chat Trigger",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "business-finder-chat-001"
+    },
+    {
+      "parameters": {
+        "options": {
+          "systemMessage": "You are a friendly business finder assistant.\n\nYour job is to help the user find businesses in a specific city or location using Google Maps data.\n\nWhen the user tells you what kind of business they are looking for and where:\n1. Extract the business type and map it to a valid Google Places type (see mappings below).\n2. Extract the city or location as specifically as possible (include country if mentioned).\n3. Call the search_businesses tool with those parameters.\n4. Present the results in a clean, readable format. For each business list: name, address, phone number, and website. If a field is missing, skip it.\n5. At the end, give a short summary: how many businesses were found.\n\nGoogle Places type mappings (use the right-hand value):\n- restaurant, food, eatery → restaurant\n- hotel, motel, hostel, accommodation → lodging\n- cafe, coffee shop → cafe\n- bar, pub, nightclub → bar\n- gym, fitness center, crossfit → gym\n- dentist, dental clinic → dentist\n- doctor, clinic, medical center → doctor\n- hospital → hospital\n- spa, beauty salon, nail salon → spa\n- hair salon, barbershop → hair_care\n- pharmacy, drugstore → pharmacy\n- supermarket, grocery, market → supermarket\n- bank, ATM → bank\n- school, kindergarten → school\n- lawyer, law firm → lawyer\n- accountant, accounting → accounting\n\nIf the business type doesn't match any mapping, use it as-is in lowercase with underscores instead of spaces.\n\nAlways confirm what you searched for before listing results.\n\nWhen the user asks to scrape emails for the found leads:\n1. Call the Scrape Businesses tool to start the async email scraping job. Save the returned job_id.\n2. Poll using Scrape Jobs Status Polling repeatedly until status is \"completed\", \"failed\", or \"stopped\".\n3. Report the final status and how many leads were processed (current_row / total_rows).\n\nWhen the user asks to create draft emails (after email scraping is done):\n1. For each lead that has an email address, call the Create Gmail Draft tool once per lead.\n2. Use the lead's business name, address, and any other available info to personalise the email body.\n3. Write a professional outreach email introducing the user's services. Keep it concise (3–4 short paragraphs): greeting, value proposition, call to action, sign-off.\n4. Set the subject to something relevant, e.g. \"Partnership opportunity with [Business Name]\".\n5. After all drafts are created, report how many drafts were saved to Gmail.",
+          "maxIterations": 100
+        }
+      },
+      "id": "66fddd1b-5c08-46a7-b8e3-fa0fe1ddbd91",
+      "name": "Business Finder Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        272,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "contextWindowLength": 10
+      },
+      "id": "59e87f75-08ad-4570-9349-343f8e94fb25",
+      "name": "Conversation Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        272,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "toolDescription": "Search for businesses on Google Maps by location and type. Call this whenever the user wants to find businesses, shops, services, or venues in a specific city or area. Returns a list of matching places with name, address, phone, and website.",
+        "method": "POST",
+        "url": "http://127.0.0.1:5000/api/scrape/google-maps",
+        "sendBody": true,
+        "parametersBody": {
+          "values": [
+            {
+              "name": "location"
+            },
+            {
+              "name": "place_type"
+            }
+          ]
+        },
+        "placeholderDefinitions": {
+          "values": [
+            {
+              "name": "location",
+              "description": "The city or area to search in. Be as specific as possible — include city and country (e.g. 'Sarande, Albania', 'Manhattan, New York, USA', 'Berlin, Germany').",
+              "type": "string"
+            },
+            {
+              "name": "place_type",
+              "description": "The Google Places type string for the business category (e.g. 'restaurant', 'lodging', 'cafe', 'gym', 'dentist', 'spa', 'pharmacy', 'bar'). Use lowercase with underscores.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "8e3faea7-a2cc-4886-b0e8-e3b0291d6071",
+      "name": "Search Businesses",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        384,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-5-mini"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        144,
+        224
+      ],
+      "id": "0231970a-684a-48d3-982b-64285b56834c",
+      "name": "OpenAI Chat Model1",
+      "credentials": {
+        "openAiApi": {
+          "id": "fwfN0PY9TNK6EzvX",
+          "name": "OpenAi Jira_test_account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toolDescription": "Scrape businesses found on Google Maps. Call this whenever the user wants to find business emails. This will start an asynchronous job that can be polled using the progress endpoint later.",
+        "method": "POST",
+        "url": "http://127.0.0.1:5000/api/scrape/leads-emails",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"max_pages\": 30,\n  \"use_tor\": false,\n  \"headless\": true\n}"
+      },
+      "id": "5a801033-7dd1-46c9-a13b-8e08dd5312f7",
+      "name": "Scrape Businesses",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        544,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "toolDescription": "Check the status of a running background scrape job. Call this to poll for progress or completion of an async job. Returns status (running/completed/failed) and progress counters.",
+        "url": "=http://127.0.0.1:5000/api/progress/{job_id}",
+        "placeholderDefinitions": {
+          "values": [
+            {
+              "name": "job_id",
+              "description": "The job_id returned from the Scrape Businesses tool response",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "6d7940e9-13a9-456c-8fd6-ece1d16aed22",
+      "name": "Scrape Jobs Status Polling",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        688,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "draft",
+        "operation": "create",
+        "subject": "={{ $fromAI('subject', 'Email subject line for the outreach draft') }}",
+        "emailType": "text",
+        "message": "={{ $fromAI('body', 'Full plain-text body of the outreach email, personalised to the lead') }}",
+        "toList": "={{ $fromAI('to_email', 'Recipient email address scraped from the lead') }}",
+        "options": {}
+      },
+      "id": "a3f9c021-7e44-4b1a-bc3d-9d5f2e8c1a47",
+      "name": "Create Gmail Draft",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        832,
+        240
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "gmail-oauth2-credentials",
+          "name": "Gmail account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Chat Trigger": {
+      "main": [
+        [
+          {
+            "node": "Business Finder Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Conversation Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Business Finder Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Businesses": {
+      "ai_tool": [
+        [
+          {
+            "node": "Business Finder Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Business Finder Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scrape Businesses": {
+      "ai_tool": [
+        [
+          {
+            "node": "Business Finder Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scrape Jobs Status Polling": {
+      "ai_tool": [
+        [
+          {
+            "node": "Business Finder Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Gmail Draft": {
+      "ai_tool": [
+        [
+          {
+            "node": "Business Finder Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "a12d785d-3d14-402a-828b-c9adf90b5520",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "7fd11e05b2ff68f747d42b1229b8759f8ce109f42de53ea588c18e1cdada1ddd"
+  },
+  "id": "G51ogqUBxTX7PWfD",
+  "tags": []
+}

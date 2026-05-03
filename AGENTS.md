@@ -32,6 +32,8 @@ Primary capabilities:
 6. Job monitoring UI: list/filter jobs, inspect progress, stop running jobs.
 7. Dashboard summary: backend summary endpoint powers lead/job metric cards.
 8. Campaign workflow: create curated outreach lists from filtered leads, track campaign-specific stages, notes, final email text, contacted state, and export campaign leads.
+9. AI-assisted campaign email drafting: generate provider-backed outreach drafts from campaign lead context for manual review and approval.
+10. Email category rule management: automatically categorize generic scraped emails by exact local-part rules and review unknown patterns.
 
 This is currently a local personal project. There is no authentication. Do not expose the backend publicly without adding auth, request caps, and rate limiting.
 
@@ -126,12 +128,14 @@ User action in React page
 | `backend/routes/api.py` | All REST endpoints for scraping, jobs, leads, summary, export |
 | `backend/database.py` | `Database` class, SQLite schema, context manager, thread-safe lock, query methods for jobs, leads, email review, and campaigns |
 | `backend/app_settings.py` | `Config` class for paths, env vars, driver locations, log settings |
+| `backend/ai_email_service.py` | Provider-neutral AI email draft generation wrapper for OpenAI and Anthropic |
 | `config/job_functions.py` | `write_progress()` upserts job state; `check_stop_signal()` reads DB stop flag |
 | `config/logging.py` | `log_function_call` and `log_all_methods` decorators |
 | `config/utils.py` | URL validation, email validation, non-business domain filtering |
 | `backend/scripts/scraping/scrape_for_email.py` | `EmailScraper` orchestrator: sitemap discovery, page scraping, dedupe |
 | `backend/scripts/scraping/page_scraper.py` | Scrapes one page through Selenium and can return emails plus visible body text |
-| `backend/scripts/scraping/email_extractor.py` | Extracts emails from page text and `mailto:` links; can also return visible page text |
+| `backend/scripts/scraping/email_extractor.py` | Extracts emails from page text and `mailto:` links; can also return visible page text plus cleaned HTML context |
+| `backend/scripts/scraping/html_context_cleaner.py` | Cleans page HTML into readable website context by removing scripts, nav/header/footer, cookie/privacy/popup blocks, then preserving headings/lists/body text |
 | `backend/scripts/scraping/sitemap_parser.py` | Discovers URLs via `robots.txt`, XML sitemaps, HTML sitemap fallbacks |
 | `backend/scripts/selenium/webdriver_manager.py` | WebDriver factory for Chrome/Firefox, headless mode, Tor proxy |
 | `backend/scripts/google_api/google_places.py` | Google Places integration and DB lead storage |
@@ -206,6 +210,46 @@ Important columns:
 Uniqueness:
 - Campaign lead membership is unique by `(campaign_id, lead_id)`.
 
+### `app_settings`
+
+Simple key/value settings table for local application configuration.
+
+Current AI email keys:
+- `ai_email_provider`: `openai` or `anthropic`.
+- `ai_email_model`: provider model name.
+- `ai_email_system_prompt`: system prompt used for campaign email drafting.
+- `ai_email_user_prompt`: user prompt/template used as part of the structured generation request.
+
+API keys are not stored in SQLite and are never returned to the frontend. They are read from environment variables.
+
+### `business_type_email_rules`
+
+Per-business-type personalization rules used by AI campaign email drafting.
+
+Important columns:
+- `business_type`: primary key matching parsed lead/campaign business types such as `dentist`.
+- `business_description`: specific description to use for that type.
+- `pain_point`: specific problem for that type.
+- `offer_angle`: automation/service angle to emphasize.
+- `extra_instructions`: optional extra prompt guidance.
+
+### `email_category_rules`
+
+Exact local-part rules used to categorize normalized `lead_emails` rows.
+
+Important columns:
+- `pattern`: lowercased email local-part such as `info`, `finance`, `reservation`, or `events`.
+- `match_type`: currently only `local_part_exact`.
+- `category`: non-unknown email category.
+- `is_active`: active/inactive rule flag.
+
+Default seeded rules include common generic local-parts for `info`, `sales`, `support`, `accounting`, `finance`, `events`, `booking`, `manager`, `reception`, `hr`, and `marketing`.
+
+Implementation behavior:
+- A SQLite trigger classifies newly inserted `lead_emails` rows when their category is empty or `unknown`.
+- Existing unknown rows are only updated when `/api/email-category-rules/apply` is called.
+- Manual/non-unknown categories are not overwritten by automatic rule application.
+
 ## Job Status Values
 
 Normal lifecycle:
@@ -248,7 +292,17 @@ All API endpoints are mounted under `/api`, except Flask root health check `/`.
 | `PATCH` | `/api/campaigns/<campaign_id>` | Edit campaign metadata | Editable: `name`, `status`, `notes` |
 | `GET` | `/api/campaigns/<campaign_id>/leads` | List campaign leads joined to lead data | Filters: `stage`, `lead_flag`, `lead_status`, `has_email`, `has_website`, `search` |
 | `PATCH` | `/api/campaign-leads/<campaign_lead_id>` | Update campaign lead workflow fields | Editable: `stage`, `priority`, `email_draft`, `final_email`, `campaign_notes`, `contacted_at` |
+| `POST` | `/api/campaign-leads/<campaign_lead_id>/generate-email` | Generate one AI email draft for a campaign lead | Stores result in `email_draft`; does not overwrite `final_email` |
+| `POST` | `/api/campaigns/<campaign_id>/generate-emails` | Batch-generate AI drafts for eligible campaign leads | Body supports optional `stage`, `search`, `limit`; no automatic sending |
 | `GET` | `/api/campaigns/<campaign_id>/export` | Export campaign leads | Default CSV; `?format=json`; optional `stage` filter |
+| `GET` | `/api/email-settings` | Read AI email drafting settings | Includes `api_key_configured`, never returns API keys |
+| `PATCH` | `/api/email-settings` | Update AI email drafting settings | Editable: `provider`, `model`, `system_prompt`, `user_prompt` |
+| `GET` | `/api/email-settings/business-types` | List business-type email personalization rules | Used by Settings and campaign detail context |
+| `PUT` | `/api/email-settings/business-types/<business_type>` | Create/update one business-type email rule | Stores description, pain point, offer angle, extra instructions |
+| `GET` | `/api/email-category-rules` | List email category auto-marking rules | Returns available categories and rules |
+| `PUT` | `/api/email-category-rules/<pattern>` | Create/update an exact local-part category rule | Category must be non-unknown |
+| `GET` | `/api/lead-emails/unknown` | List unknown email local-parts | Shows count and example email for rule creation |
+| `POST` | `/api/email-category-rules/apply` | Reapply active rules to unknown emails | Updates unknown rows only |
 | `GET` | `/api/jobs` | List job history with filters | Filters: `status`, `step_id`, `limit`; limit capped at 200 |
 | `GET` | `/api/summary` | Dashboard summary counts | Counts lead pipeline and job statuses |
 
@@ -355,6 +409,7 @@ Business logic:
 - Summary capture is intentionally simple: it uses the lead website homepage only and does not try about/service/contact fallback pages.
 - One-off `/api/scrape/website-emails` remains email-only and does not capture/store website summary context.
 - Summary status is stored as `captured`, `empty`, or `failed`; no LLM/API summarization is used.
+- Homepage context is HTML-aware: scraper captures page HTML, removes noisy DOM sections such as scripts, nav/header/footer, cookie consent, privacy/policy, newsletter, modal/popup blocks, then stores readable full-body text with headings and list boundaries preserved.
 
 ### `GET /api/leads`
 
@@ -503,9 +558,10 @@ Pages in `frontend/src/App.tsx`:
 | Website Emails | One-off website email scrape | `/api/scrape/website-emails` |
 | Enrich Leads | Start bulk email enrichment and poll progress | `/api/scrape/leads-emails`, `/api/progress/<job_id>`, `/api/stop/<job_id>` |
 | Leads | List/filter leads, row actions, detail panel, manual edits, CSV export | `/api/leads`, `/api/leads/<lead_id>`, `/api/leads/export` |
-| Campaigns | Create campaigns from lead filters, review campaign leads, update stages/priority/notes/final email, export campaign CSV | `/api/campaigns`, `/api/campaigns/<campaign_id>`, `/api/campaigns/<campaign_id>/leads`, `/api/campaign-leads/<campaign_lead_id>`, `/api/campaigns/<campaign_id>/export` |
+| Campaigns | Create campaigns from lead filters, review campaign leads, generate AI drafts, update stages/priority/notes/final email, export campaign CSV | `/api/campaigns`, `/api/campaigns/<campaign_id>`, `/api/campaigns/<campaign_id>/leads`, `/api/campaign-leads/<campaign_lead_id>`, `/api/campaign-leads/<campaign_lead_id>/generate-email`, `/api/campaigns/<campaign_id>/generate-emails`, `/api/campaigns/<campaign_id>/export` |
 | Jobs | List/filter job history, select job details, stop running jobs | `/api/jobs`, `/api/progress/<job_id>`, `/api/stop/<job_id>` |
-| Settings | Static runtime info for local frontend/backend defaults | none |
+| Email Rules | Review unknown email local-parts, create exact local-part category rules, and reapply rules to unknown emails | `/api/email-category-rules`, `/api/lead-emails/unknown` |
+| Settings | Configure AI email drafting provider/model/prompts and business-type personalization rules | `/api/email-settings`, `/api/email-settings/business-types`, `/api/leads/filter-options` |
 
 Frontend API clients:
 - `frontend/src/api/httpClient.ts`: fetch wrapper, base URLs, `ApiError`, download helper.
@@ -514,6 +570,8 @@ Frontend API clients:
 - `frontend/src/api/jobsApi.ts`: job list, progress, stop.
 - `frontend/src/api/leadsApi.ts`: lead list, patch, export.
 - `frontend/src/api/summaryApi.ts`: dashboard summary.
+- `frontend/src/api/emailSettingsApi.ts`: AI email settings and business-type personalization rules.
+- `frontend/src/api/emailRulesApi.ts`: email category rule management and unknown local-part review.
 - `frontend/src/api/types.ts`: shared TypeScript response/request types.
 
 Frontend hooks:
@@ -528,6 +586,13 @@ Frontend hooks:
 - `useUpdateLead()`
 - `useExportLeadsJson()`
 - `useSummary()`
+- `useEmailSettings()`
+- `useBusinessTypeEmailRules()`
+- `useGenerateCampaignLeadEmail()`
+- `useGenerateCampaignEmails()`
+- `useEmailCategoryRules()`
+- `useUnknownEmailLocalParts()`
+- `useApplyEmailCategoryRules()`
 
 ## Current UI Behavior
 
@@ -588,6 +653,8 @@ The left navigation sidebar can collapse/expand through the small top-left icon.
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `GOOGLE_API_KEY` | none | Required for Google Places scraping |
+| `OPENAI_API_KEY` | none | Required when AI email provider is `openai` |
+| `ANTHROPIC_API_KEY` | none | Required when AI email provider is `anthropic` |
 | `LOG_LEVEL` | `INFO` | App log level |
 | `MAX_THREADS` | `5` | Max concurrent email scraping threads |
 | `TOR_EXECUTABLE` | OS-specific path | Path to Tor binary |
@@ -631,6 +698,9 @@ Additional endpoints:
 
 `GET /api/leads` also supports `lead_flag` and `lead_status` filters.
 
+Email categories:
+- `unknown`, `booking`, `info`, `sales`, `support`, `accounting`, `finance`, `events`, `hr`, `marketing`, `manager`, `reception`.
+
 Lead detail UI now supports:
 - Editing lead flag, review status, notes, and captured website context.
 - Reviewing individual emails.
@@ -640,6 +710,20 @@ Lead detail UI now supports:
 - Deleting bad emails.
 - Email review rows are vertically stacked in the narrow lead detail panel so long email addresses remain readable; controls appear below the email text.
 - Captured website context is shown in the lead detail panel with summary status, source URL, and last summary update timestamp.
+
+## Email Category Rule Workflow
+
+The Email Rules tab manages deterministic auto-marking of generic emails.
+
+Current behavior:
+- Scraped and manually inserted normalized email rows are automatically categorized by exact local-part rules when their category is empty or `unknown`.
+- Examples: `info@domain.com` -> `info`, `finance@domain.com` -> `finance`, `events@domain.com` -> `events`, `reservation@domain.com` -> `booking`.
+- Personal-name emails remain `unknown` unless a user intentionally creates a matching rule.
+- The Email Rules tab lists unknown local-parts with counts and example addresses.
+- Users can promote an unknown local-part into a category rule.
+- Users can manually add a rule by typing a local-part and selecting a category.
+- The `Reapply rules` action applies active rules to currently unknown emails only.
+- Existing manually reviewed/non-unknown categories are not overwritten by rule application.
 
 ## Campaign Workflow
 
@@ -653,3 +737,25 @@ Current behavior:
 - The Leads tab shows a Campaign column and expanded lead details list campaign memberships.
 - The Campaigns tab lists campaigns, creates campaigns, opens campaign detail, filters campaign leads by stage/search, updates stage and priority inline, edits campaign notes/email draft/final email, marks leads contacted, and exports campaign CSV.
 - Campaign detail stage counts are interactive buttons. Selecting a stage button filters the campaign lead table to that exact stage; selecting `All` shows every campaign lead. When a lead is moved from one stage to another, it should disappear from the previous active stage view after the campaign lead query refreshes.
+
+## AI-Assisted Campaign Email Drafting
+
+AI email drafting is part of the Campaigns workflow, not an automatic sending system.
+
+Current behavior:
+- Settings tab manages provider (`openai` or `anthropic`), model, system prompt, user prompt/template, and per-business-type personalization rules.
+- Provider API keys are read server-side from `.env` as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`. The frontend only receives `api_key_configured`.
+- A single campaign lead draft can be generated from the expanded campaign lead row.
+- Visible/filtered campaign leads can be batch-generated from the campaign detail toolbar.
+- Generation uses campaign lead context: lead name, business type, location, address, phone, website, usable email, website summary, campaign notes, existing draft/final email, and the matching business-type email rule.
+- Generated text is stored in `campaign_leads.email_draft`.
+- Generation never overwrites `campaign_leads.final_email`.
+- Successful generation moves eligible leads to `drafted`; it does not move leads already in `approved`, `contacted`, `replied`, `closed`, `skipped`, or `do_not_contact`.
+- Leads without a usable email, leads with base `lead_status='do_not_contact'`, and blocked campaign stages are not eligible for generation.
+- Human review remains required: users edit `email_draft`, save `final_email`, approve, copy draft/final email text, and mark contacted manually.
+
+Implementation notes:
+- `backend/ai_email_service.py` wraps OpenAI Chat Completions and Anthropic Messages behind `generate_email_draft()`.
+- The saved Settings user prompt/template is sent as the primary email structure. The prompt explicitly tells the model to preserve the template's intent, call-to-action, sign-off, and flow, then use structured lead/campaign data beneath it.
+- Routes keep API keys server-side and return clear errors for unsupported providers, missing keys, blocked leads, and provider failures.
+- Batch generation is synchronous and capped by request `limit` (default 25, max 100); use it for small local batches.
