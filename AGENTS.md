@@ -132,7 +132,7 @@ User action in React page
 | `config/job_functions.py` | `write_progress()` upserts job state; `check_stop_signal()` reads DB stop flag |
 | `config/logging.py` | `log_function_call` and `log_all_methods` decorators |
 | `config/utils.py` | URL validation, email validation, non-business domain filtering |
-| `backend/scripts/scraping/scrape_for_email.py` | `EmailScraper` orchestrator: sitemap discovery, page scraping, dedupe |
+| `backend/scripts/scraping/scrape_for_email.py` | `EmailScraper` orchestrator: sitemap discovery, bounded worker WebDriver pool page scraping, dedupe |
 | `backend/scripts/scraping/page_scraper.py` | Scrapes one page through Selenium and can return emails plus visible body text |
 | `backend/scripts/scraping/email_extractor.py` | Extracts emails from page text and `mailto:` links; can also return visible page text plus cleaned HTML context |
 | `backend/scripts/scraping/html_context_cleaner.py` | Cleans page HTML into readable website context by removing scripts, nav/header/footer, cookie/privacy/popup blocks, then preserving headings/lists/body text |
@@ -410,6 +410,7 @@ Business logic:
 - One-off `/api/scrape/website-emails` remains email-only and does not capture/store website summary context.
 - Summary status is stored as `captured`, `empty`, or `failed`; no LLM/API summarization is used.
 - Homepage context is HTML-aware: scraper captures page HTML, removes noisy DOM sections such as scripts, nav/header/footer, cookie consent, privacy/policy, newsletter, modal/popup blocks, then stores readable full-body text with headings and list boundaries preserved.
+- Page scraping uses a bounded worker-owned Selenium driver pool: the main WebDriver handles homepage summary and sitemap discovery, then each page worker reuses one private WebDriver for multiple URLs and clears cookies/browser storage between pages. With `max_pages=30` and `MAX_THREADS=5`, page scraping starts at most five worker browser sessions instead of one browser per page.
 
 ### `GET /api/leads`
 
