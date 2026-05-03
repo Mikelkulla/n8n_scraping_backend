@@ -131,7 +131,7 @@ User action in React page
 | `backend/ai_email_service.py` | Provider-neutral AI email draft generation wrapper for OpenAI and Anthropic |
 | `config/job_functions.py` | `write_progress()` upserts job state; `check_stop_signal()` reads DB stop flag |
 | `config/logging.py` | `log_function_call` and `log_all_methods` decorators |
-| `config/utils.py` | URL validation, email validation, non-business domain filtering |
+| `config/utils.py` | URL validation, email validation, exact/subdomain non-business domain filtering |
 | `backend/scripts/scraping/scrape_for_email.py` | `EmailScraper` orchestrator: sitemap discovery, bounded worker WebDriver pool page scraping, dedupe |
 | `backend/scripts/scraping/page_scraper.py` | Scrapes one page through Selenium and can return emails plus visible body text |
 | `backend/scripts/scraping/email_extractor.py` | Extracts emails from page text and `mailto:` links; can also return visible page text plus cleaned HTML context |
@@ -670,6 +670,7 @@ The left navigation sidebar can collapse/expand through the small top-left icon.
 - Frontend is concentrated in `frontend/src/App.tsx`. If the UI grows further, split pages/components into separate files.
 - Clipboard features use `navigator.clipboard`, which works on localhost/secure contexts.
 - Manual lead editing supports website, legacy emails string, scrape status, lead flag, lead review status, notes, and captured website context.
+- URL non-business filtering is exact-domain/subdomain based. For example, `booking.com` and `www.booking.com` are blocked, but unrelated legitimate `.co.uk` business sites are not blocked merely because another blocked marketplace domain also uses `.co.uk`.
 
 ## Lead and Email Review System
 

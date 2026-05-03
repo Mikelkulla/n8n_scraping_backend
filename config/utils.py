@@ -9,6 +9,18 @@ import json
 import time
 from urllib.parse import urlparse
 
+NON_BUSINESS_DOMAINS = [
+    'airbnb.co.uk', 'airbnb.co.za', 'airbnb.com', 'airbnb.mx', 'airbnb.net',
+    'airbnbmail.com', 'booking.com', 'facebook.com', 'instagram.com', 'jscache.com',
+    'linkedin.com', 'muscache.com', 'pinterest.com', 'snapchat.com', 'tacdn.com',
+    'tamgrt.com', 'tiktok.com', 'tripadvisor.cn', 'tripadvisor.co.uk',
+    'tripadvisor.com', 'tripadvisor.de', 'twitter.com', 'x.com', 'youtube.com'
+]
+
+VALIDATION_EXTRA_NON_BUSINESS_DOMAINS = [
+    'ihg.com'
+]
+
 
 def load_csv(input_csv, output_csv, required_columns=None):
     """Loads a CSV file, prioritizing an existing output file over the input file.
@@ -63,7 +75,18 @@ def load_csv(input_csv, output_csv, required_columns=None):
         print(f"Error loading CSV: {e}")
         return None, None
     
-def is_non_business_domain(domain):
+def _normalize_domain(domain):
+    domain = domain.lower().strip()
+    if "://" in domain:
+        domain = urlparse(domain).netloc.lower()
+    domain = domain.split("@")[-1]
+    domain = domain.split(":")[0]
+    return domain.strip(".")
+
+def _domain_matches_blocked_domain(domain, blocked_domain):
+    return domain == blocked_domain or domain.endswith("." + blocked_domain)
+
+def is_non_business_domain(domain, extra_domains=None):
     """Checks if a domain belongs to a list of common non-business websites.
 
     This function is used to filter out domains that are typically not associated
@@ -76,17 +99,11 @@ def is_non_business_domain(domain):
     Returns:
         bool: True if the domain is in the non-business list, False otherwise.
     """
-    non_business_domains = [
-        'airbnb.co.uk', 'airbnb.co.za', 'airbnb.com', 'airbnb.mx', 'airbnb.net',
-        'airbnbmail.com', 'booking.com', 'facebook.com', 'instagram.com', 'jscache.com',
-        'linkedin.com', 'muscache.com', 'pinterest.com', 'snapchat.com', 'tacdn.com',
-        'tamgrt.com', 'tiktok.com', 'tripadvisor.cn', 'tripadvisor.co.uk',
-        'tripadvisor.com', 'tripadvisor.de', 'twitter.com', 'x.com', 'youtube.com'
-    ]
-    # Check if domain or any subdomain matches non-business domains
-    domain = domain.lower()
-    for non_business in non_business_domains:
-        if domain == non_business or domain.endswith('.' + non_business):
+    # Check if domain or any subdomain matches non-business domains.
+    domain = _normalize_domain(domain)
+    blocked_domains = NON_BUSINESS_DOMAINS + list(extra_domains or [])
+    for non_business in blocked_domains:
+        if _domain_matches_blocked_domain(domain, non_business):
             return True
     return False
 
@@ -138,15 +155,6 @@ def validate_url(url):
         base URL and None if the URL is valid. Otherwise, a tuple of None
         and an error message.
     """
-    # List of non-business domains
-    non_business_domains = [
-        'airbnb.co.uk', 'airbnb.co.za', 'airbnb.com', 'airbnb.mx', 'airbnb.net',
-        'airbnbmail.com', 'booking.com', 'facebook.com', 'instagram.com', 'jscache.com',
-        'linkedin.com', 'muscache.com', 'pinterest.com', 'snapchat.com', 'tacdn.com',
-        'tamgrt.com', 'tiktok.com', 'tripadvisor.cn', 'tripadvisor.co.uk',
-        'tripadvisor.com', 'tripadvisor.de', 'twitter.com', 'x.com', 'youtube.com', "ihg.com"
-    ]
-
     try:
         # Validate URL format
         if not re.match(r"^https?://[\w\-]+(\.[\w\-]+)+[/\w\-\?\=\&\.\;\%]*$", url):
@@ -161,17 +169,10 @@ def validate_url(url):
         parsed = urlparse(url)
         domain = parsed.netloc.lower()
         
-        # Extract second-level domain (SLD) from input domain
-        domain_parts = domain.split('.')
-        sld = domain_parts[-2] if len(domain_parts) >= 2 else domain
-        
-        # Check if the SLD matches the SLD of any non-business domain
-        for non_business in non_business_domains:
-            non_business_parts = non_business.split('.')
-            non_business_sld = non_business_parts[-2] if len(non_business_parts) >= 2 else non_business
-            if sld == non_business_sld:
-                logging.info(f"Non-business domain: {domain} (SLD: {sld})")
-                return None, "Non-business domain"
+        # Check exact blocked domains and their subdomains only.
+        if is_non_business_domain(domain, extra_domains=VALIDATION_EXTRA_NON_BUSINESS_DOMAINS):
+            logging.info(f"Non-business domain: {domain}")
+            return None, "Non-business domain"
         
         # Return normalized base URL
         base_url = f'{parsed.scheme}://{parsed.netloc}'.lower()
