@@ -21,6 +21,7 @@ Backend:
 Frontend:
 - Vite + React + TypeScript app in `frontend/`.
 - TanStack Query for API calls, mutations, polling, and cache refresh.
+- React Router for first-class page URLs and refresh-safe navigation.
 - Operational UI for scraping, lead management, jobs, exports, dashboard metrics, global data refresh, and collapsible sidebar navigation.
 
 Primary capabilities:
@@ -93,6 +94,8 @@ npm run dev
 The frontend uses Vite proxy routes:
 - Browser calls to `/api/*` proxy to `http://localhost:5000/api/*`.
 - Browser calls to `/backend-health` proxy to Flask `/`.
+
+Frontend route URLs are handled client-side by React Router. Refresh-safe pages include `/dashboard`, `/discover`, `/website-emails`, `/enrich`, `/leads`, `/campaigns`, `/email-rules`, `/jobs`, and `/settings`.
 
 ## Architecture
 
@@ -596,6 +599,16 @@ Frontend hooks:
 - `useApplyEmailCategoryRules()`
 
 ## Current UI Behavior
+
+### UI State Persistence
+
+The frontend uses a hybrid persistence model:
+- React Router owns page navigation. Refreshing a browser page keeps the user on the same route instead of resetting to Dashboard.
+- URL query parameters own shareable operational state such as scrape form inputs, lead filters, job filters, campaign filters, selected campaign/lead/job IDs, pagination, and page size where implemented.
+- `localStorage` owns durable UI preferences such as collapsed sidebar state and preferred lead table page size.
+- `sessionStorage` owns temporary work-in-progress drafts such as campaign creation text.
+
+Do not store API keys or secrets in URL params, `localStorage`, or `sessionStorage`.
 
 ### Leads Page
 
