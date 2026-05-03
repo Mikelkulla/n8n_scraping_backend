@@ -137,34 +137,21 @@ def call_google_places_api_near_search(job_id, step_id, location, radius=300, pl
                 logging.info(f"Lead Data: {lead_data}")
                 results.append(lead_data)
 
-                # Check if lead exists
-                db.cursor.execute("SELECT lead_id FROM leads WHERE place_id = ? AND execution_id = ?", (place_id, execution_id))
-                existing_lead = db.cursor.fetchone()
-                logging.info(f"Existing Lead: {existing_lead}")
-                if existing_lead:
-                    # Update existing lead
-                    db.update_lead(
-                        place_id=place_id,
-                        execution_id=execution_id,
-                        location=lead_data["location"],
-                        name=lead_data["name"],
-                        address=lead_data["address"],
-                        phone=lead_data["phone"],
-                        website=lead_data["website"]
-                    )
-                    logging.info(f"Updated existing lead for place {lead_data['name']} (execution_id: {execution_id})")
-                else:
-                    # Insert new lead
-                    db.insert_lead(
-                        execution_id=execution_id,
-                        place_id=place_id,
-                        location=lead_data["location"],
-                        name=lead_data["name"],
-                        address=lead_data["address"],
-                        phone=lead_data["phone"],
-                        website=lead_data["website"]
-                    )
-                    logging.info(f"Stored lead for place {lead_data['name']} (execution_id: {execution_id})")
+                stored_lead = db.upsert_google_places_lead(
+                    execution_id=execution_id,
+                    place_id=place_id,
+                    location=lead_data["location"],
+                    name=lead_data["name"],
+                    address=lead_data["address"],
+                    phone=lead_data["phone"],
+                    website=lead_data["website"]
+                )
+                lead_data["lead_id"] = stored_lead.get("lead_id") if stored_lead else None
+                lead_data["storage_status"] = stored_lead.get("storage_status") if stored_lead else None
+                logging.info(
+                    f"{lead_data['storage_status'] or 'stored'} canonical lead for place "
+                    f"{lead_data['name']} (place_id: {place_id}, execution_id: {execution_id})"
+                )
                 count += 1
 
             return results
@@ -272,37 +259,21 @@ def call_google_places_api(job_id, step_id, location, radius=300, place_type="lo
                     logging.info(f"Lead Data: {lead_data}")
                     results.append(lead_data)
 
-                    # Check if lead exists
-                    logging.info("Before Select")
-                    db.cursor.execute("SELECT lead_id FROM leads WHERE place_id = ? AND execution_id = ?", (place_id, execution_id))
-                    logging.info("After Select")
-                    existing_lead = db.cursor.fetchone()
-                    logging.info(f"Existing Lead: {existing_lead}")
-
-                    if existing_lead:
-                        # Update existing lead
-                        db.update_lead(
-                            place_id=place_id,
-                            execution_id=execution_id,
-                            location=lead_data["location"],
-                            name=lead_data["name"],
-                            address=lead_data["address"],
-                            phone=lead_data["phone"],
-                            website=lead_data["website"]
-                        )
-                        logging.info(f"Updated existing lead for place {lead_data['name']} (execution_id: {execution_id})")
-                    else:
-                        # Insert new lead
-                        db.insert_lead(
-                            execution_id=execution_id,
-                            place_id=place_id,
-                            location=lead_data["location"],
-                            name=lead_data["name"],
-                            address=lead_data["address"],
-                            phone=lead_data["phone"],
-                            website=lead_data["website"]
-                        )
-                        logging.info(f"Stored lead for place {lead_data['name']} (execution_id: {execution_id})")
+                    stored_lead = db.upsert_google_places_lead(
+                        execution_id=execution_id,
+                        place_id=place_id,
+                        location=lead_data["location"],
+                        name=lead_data["name"],
+                        address=lead_data["address"],
+                        phone=lead_data["phone"],
+                        website=lead_data["website"]
+                    )
+                    lead_data["lead_id"] = stored_lead.get("lead_id") if stored_lead else None
+                    lead_data["storage_status"] = stored_lead.get("storage_status") if stored_lead else None
+                    logging.info(
+                        f"{lead_data['storage_status'] or 'stored'} canonical lead for place "
+                        f"{lead_data['name']} (place_id: {place_id}, execution_id: {execution_id})"
+                    )
                     write_progress(job_id, step_id, input=f"{place_type}:{location}", current_row=count + 1, total_rows=total_rows, db_connection=db)
                     count += 1
 

@@ -56,6 +56,9 @@ export type Lead = {
   campaign_count?: number;
   campaign_names?: string[];
   campaign_memberships?: CampaignMembership[];
+  discovery_count?: number;
+  last_discovered_at?: string | null;
+  last_discovery_job_id?: string | null;
   created_at?: string;
   updated_at?: string;
 };
