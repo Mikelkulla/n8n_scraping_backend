@@ -8,6 +8,7 @@ from backend.app_settings import Config
 import logging
 import concurrent.futures
 import threading
+from queue import Empty, Queue
 
 def sort_urls_by_email_likelihood(urls):
     """Sorts a list of URLs based on their likelihood of containing contact information.
@@ -232,37 +233,85 @@ class EmailScraper:
         self.summary_source_url = None
         self.summary_status = "empty"
 
-    def _scrape_worker(self, url):
-        """The target function for each scraping thread.
+    def _close_main_driver(self):
+        """Closes the discovery WebDriver without affecting worker drivers."""
+        if self.manager:
+            logging.info(f"Closing discovery WebDriver for job {self.job_id}...")
+            self.manager.close()
+            self.manager = None
+            self.driver = None
 
-        This function scrapes a single URL for emails. It manages its own WebDriver
-        instance and updates shared state (visited URLs, found emails) using a lock.
+    def _reset_worker_driver_state(self, driver):
+        """Best-effort cleanup between pages when a worker reuses a WebDriver."""
+        try:
+            driver.delete_all_cookies()
+        except Exception as e:
+            logging.debug(f"Unable to clear cookies for job {self.job_id}: {e}")
 
-        Args:
-            url (str): The URL to be scraped by the worker.
-        """
+        try:
+            driver.execute_script("window.localStorage.clear(); window.sessionStorage.clear();")
+        except Exception as e:
+            logging.debug(f"Unable to clear browser storage for job {self.job_id}: {e}")
+
+    def _claim_next_url(self, url_queue):
+        """Returns the next URL to scrape, respecting stop requests and limits."""
         if self._stop_requested():
-            return
-        
+            return None
+
+        try:
+            url = url_queue.get_nowait()
+        except Empty:
+            return None
+
         with self.lock:
             if url in self.visited_urls or len(self.visited_urls) >= self.max_pages:
+                return None
+
+        return url
+
+    def _record_scrape_result(self, url, emails):
+        """Updates shared scrape state after a page has completed."""
+        with self.lock:
+            if len(self.visited_urls) >= self.max_pages or self._stop_requested():
                 return
 
-        thread_manager = WebDriverManager(use_tor=self.use_tor, headless=self.headless)
-        driver = thread_manager.get_driver()
-        if not driver:
-            logging.error(f"Failed to get driver for thread on job {self.job_id}")
+            self.visited_urls.add(url)
+            self.all_emails.update(emails)
+            self.progress_counter += 1
+            logging.info(f"Scraped page {self.progress_counter}/{self.total_urls} for job {self.job_id}: {url}")
+            write_progress(self.job_id, self.step_id, self.base_url, self.max_pages, self.use_tor, self.headless, status="running", current_row=self.progress_counter, total_rows=self.total_urls)
+
+    def _scrape_worker_loop(self, url_queue):
+        """Scrapes queued pages with one WebDriver owned by this worker thread."""
+        if self._stop_requested():
             return
 
         try:
-            emails = scrape_page(driver, url)
-            with self.lock:
-                if len(self.visited_urls) < self.max_pages and not self._stop_requested():
-                    self.visited_urls.add(url)
-                    self.all_emails.update(emails)
-                    self.progress_counter += 1
-                    logging.info(f"Scraped page {self.progress_counter}/{self.total_urls} for job {self.job_id}: {url}")
-                    write_progress(self.job_id, self.step_id, self.base_url, self.max_pages, self.use_tor, self.headless, status="running", current_row=self.progress_counter, total_rows=self.total_urls)
+            thread_manager = WebDriverManager(use_tor=self.use_tor, headless=self.headless)
+        except Exception as e:
+            logging.error(f"Failed to create WebDriver manager for worker on job {self.job_id}: {e}")
+            return
+
+        driver = thread_manager.get_driver()
+        if not driver:
+            logging.error(f"Failed to get driver for worker on job {self.job_id}")
+            try:
+                thread_manager.close()
+            except Exception as e:
+                logging.warning(f"Failed to close empty WebDriver manager for job {self.job_id}: {e}")
+            return
+
+        try:
+            while True:
+                url = self._claim_next_url(url_queue)
+                if not url:
+                    return
+
+                try:
+                    emails = scrape_page(driver, url)
+                    self._record_scrape_result(url, emails)
+                finally:
+                    self._reset_worker_driver_state(driver)
         finally:
             thread_manager.close()
 
@@ -270,9 +319,21 @@ class EmailScraper:
         """Manages the concurrent scraping of URLs using a thread pool."""
         write_progress(self.job_id, self.step_id, self.base_url, self.max_pages, self.use_tor, self.headless, status="running", current_row=0, total_rows=self.total_urls)
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_threads) as executor:
-            # Use list to ensure all futures are created before waiting
-            futures = list(executor.map(self._scrape_worker, self.urls_to_visit[:self.max_pages]))
+        urls = self.urls_to_visit[:self.max_pages]
+        worker_count = min(self.max_threads, len(urls))
+
+        if worker_count > 0:
+            url_queue = Queue()
+            for url in urls:
+                url_queue.put(url)
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+                futures = [
+                    executor.submit(self._scrape_worker_loop, url_queue)
+                    for _ in range(worker_count)
+                ]
+                for future in concurrent.futures.as_completed(futures):
+                    future.result()
 
         if self._stop_requested():
             write_progress(self.job_id, self.step_id, self.base_url, self.max_pages, self.use_tor, self.headless, status="stopped", total_rows=self.total_urls)
@@ -281,9 +342,7 @@ class EmailScraper:
 
     def _cleanup(self):
         """Closes the main WebDriver instance."""
-        if self.manager:
-            logging.info(f"Closing WebDriver for job {self.job_id}...")
-            self.manager.close()
+        self._close_main_driver()
 
     def run(self):
         """Executes the complete email scraping process.
@@ -298,6 +357,7 @@ class EmailScraper:
             self._setup_driver()
             self._discover_urls()
             self._filter_and_sort_urls()
+            self._close_main_driver()
             self._scrape_pages()
             
             logging.info(f"Finished scraping for job {self.job_id}. Total unique emails found: {len(self.all_emails)}")
@@ -317,6 +377,7 @@ class EmailScraper:
             self._capture_summary()
             self._discover_urls()
             self._filter_and_sort_urls()
+            self._close_main_driver()
             self._scrape_pages()
 
             logging.info(f"Finished scraping for job {self.job_id}. Total unique emails found: {len(self.all_emails)}")
