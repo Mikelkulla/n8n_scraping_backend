@@ -119,7 +119,7 @@ export type JobProgressResponse = {
 
 export type StopJobResponse = {
   job_id: string;
-  status: "stopped";
+  status: "stopping" | "stopped";
 };
 
 export type JobExecution = {

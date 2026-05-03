@@ -59,7 +59,7 @@ pytest tests/test_backend_database.py::TestDatabase::test_insert_and_get_job_exe
 pytest --cov=backend --cov=config
 ```
 
-Pytest discovery is configured in `pytest.ini` to only collect tests from `tests/` and to ignore runtime/generated folders such as `backend/temp`, `frontend`, `node_modules`, and `venv`.
+Pytest discovery is configured in `pytest.ini` to put the repo root on `PYTHONPATH`, only collect tests from `tests/`, and ignore runtime/generated folders such as `backend/temp`, `frontend`, `node_modules`, and `venv`.
 
 ```bash
 # Frontend setup
@@ -263,12 +263,12 @@ Stop flow:
 ```text
 Client POST /api/stop/<job_id>
   -> backend finds step_id
-  -> backend writes stop_call=True and status=stopped
+  -> backend writes stop_call=True while keeping status=running
   -> scraper checks check_stop_signal()
-  -> background job exits cleanly when it next checks the flag
+  -> background job writes status=stopped when it observes the flag and exits
 ```
 
-Stop is most useful for the async `leads_email_scrape` flow. Synchronous routes can already be blocking the request that started them.
+`POST /api/stop/<job_id>` can return `status="stopping"` while the background thread is still exiting. The frontend keeps polling because `/api/progress/<job_id>` remains `running` until the worker finishes. Stop is most useful for the async `leads_email_scrape` flow. Synchronous routes can already be blocking the request that started them.
 
 ## Current API Endpoints
 

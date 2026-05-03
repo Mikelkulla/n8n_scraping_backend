@@ -100,7 +100,19 @@ class EmailScraper:
     setting up the web driver, discovering URLs through sitemaps, filtering and
     sorting them, scraping pages concurrently, and handling cleanup.
     """
-    def __init__(self, job_id, step_id, base_url, max_pages=10, use_tor=False, headless=False, sitemap_limit=10, max_threads=Config.MAX_THREADS):
+    def __init__(
+        self,
+        job_id,
+        step_id,
+        base_url,
+        max_pages=10,
+        use_tor=False,
+        headless=False,
+        sitemap_limit=10,
+        max_threads=Config.MAX_THREADS,
+        stop_job_id=None,
+        stop_step_id=None,
+    ):
         """Initializes the EmailScraper instance.
 
         Args:
@@ -126,6 +138,8 @@ class EmailScraper:
         self.headless = headless
         self.sitemap_limit = sitemap_limit
         self.max_threads = max_threads
+        self.stop_job_id = stop_job_id or job_id
+        self.stop_step_id = stop_step_id or step_id
         self.manager = None
         self.driver = None
         self.all_emails = set()
@@ -137,6 +151,10 @@ class EmailScraper:
         self.total_urls = 0
         self.lock = threading.Lock()
         self.progress_counter = 0
+
+    def _stop_requested(self):
+        """Checks the controlling job stop flag for this scrape."""
+        return check_stop_signal(self.stop_job_id, self.stop_step_id)
 
     def _setup_driver(self):
         """Initializes the Selenium WebDriver.
@@ -191,7 +209,7 @@ class EmailScraper:
 
     def _capture_summary(self):
         """Captures cleaned visible text from the website homepage only."""
-        if check_stop_signal(self.job_id, self.step_id):
+        if self._stop_requested():
             self.summary_status = "failed"
             return
 
@@ -223,7 +241,7 @@ class EmailScraper:
         Args:
             url (str): The URL to be scraped by the worker.
         """
-        if check_stop_signal(self.job_id, self.step_id):
+        if self._stop_requested():
             return
         
         with self.lock:
@@ -239,7 +257,7 @@ class EmailScraper:
         try:
             emails = scrape_page(driver, url)
             with self.lock:
-                if len(self.visited_urls) < self.max_pages:
+                if len(self.visited_urls) < self.max_pages and not self._stop_requested():
                     self.visited_urls.add(url)
                     self.all_emails.update(emails)
                     self.progress_counter += 1
@@ -256,7 +274,9 @@ class EmailScraper:
             # Use list to ensure all futures are created before waiting
             futures = list(executor.map(self._scrape_worker, self.urls_to_visit[:self.max_pages]))
 
-        if not check_stop_signal(self.job_id, self.step_id):
+        if self._stop_requested():
+            write_progress(self.job_id, self.step_id, self.base_url, self.max_pages, self.use_tor, self.headless, status="stopped", total_rows=self.total_urls)
+        else:
             write_progress(self.job_id, self.step_id, self.base_url, self.max_pages, self.use_tor, self.headless, status="completed", total_rows=self.total_urls)
 
     def _cleanup(self):
@@ -319,7 +339,18 @@ class EmailScraper:
         finally:
             self._cleanup()
 
-def scrape_emails(job_id, step_id, base_url, max_pages=10, use_tor=False, headless=False, sitemap_limit=10, max_threads=Config.MAX_THREADS):
+def scrape_emails(
+    job_id,
+    step_id,
+    base_url,
+    max_pages=10,
+    use_tor=False,
+    headless=False,
+    sitemap_limit=10,
+    max_threads=Config.MAX_THREADS,
+    stop_job_id=None,
+    stop_step_id=None,
+):
     """A convenience function to initiate an email scraping job.
 
     This function creates an instance of the `EmailScraper` class and calls its
@@ -341,10 +372,43 @@ def scrape_emails(job_id, step_id, base_url, max_pages=10, use_tor=False, headle
     Returns:
         list[str]: A list of unique email addresses found.
     """
-    scraper = EmailScraper(job_id, step_id, base_url, max_pages, use_tor, headless, sitemap_limit, max_threads)
+    scraper = EmailScraper(
+        job_id,
+        step_id,
+        base_url,
+        max_pages,
+        use_tor,
+        headless,
+        sitemap_limit,
+        max_threads,
+        stop_job_id=stop_job_id,
+        stop_step_id=stop_step_id,
+    )
     return scraper.run()
 
-def scrape_emails_with_summary(job_id, step_id, base_url, max_pages=10, use_tor=False, headless=False, sitemap_limit=10, max_threads=Config.MAX_THREADS):
+def scrape_emails_with_summary(
+    job_id,
+    step_id,
+    base_url,
+    max_pages=10,
+    use_tor=False,
+    headless=False,
+    sitemap_limit=10,
+    max_threads=Config.MAX_THREADS,
+    stop_job_id=None,
+    stop_step_id=None,
+):
     """Scrapes emails and a cleaned public website context excerpt."""
-    scraper = EmailScraper(job_id, step_id, base_url, max_pages, use_tor, headless, sitemap_limit, max_threads)
+    scraper = EmailScraper(
+        job_id,
+        step_id,
+        base_url,
+        max_pages,
+        use_tor,
+        headless,
+        sitemap_limit,
+        max_threads,
+        stop_job_id=stop_job_id,
+        stop_step_id=stop_step_id,
+    )
     return scraper.run_with_summary()
