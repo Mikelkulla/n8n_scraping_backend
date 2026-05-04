@@ -82,6 +82,8 @@ DEFAULT_EMAIL_CATEGORY_RULES = [
     ("marketing", "marketing"),
 ]
 
+CURRENT_SCHEMA_VERSION = 1
+
 @log_all_methods
 class Database:
     """Manages the application's SQLite database connection and operations.
@@ -97,7 +99,7 @@ class Database:
     _lock = threading.RLock()
 
     def __init__(self, db_path=None):
-        """Initializes the Database instance and sets up the database schema.
+        """Initializes the Database instance.
 
         Args:
             db_path (str, optional): The path to the database file. If not
@@ -110,11 +112,19 @@ class Database:
             self.db_path = db_path
         self.conn = None
         self.cursor = None
+        self._initialize_memory_connections = False
+
+    def initialize(self):
+        """Runs schema creation and versioned migrations for this database."""
+        if self.db_path == ':memory:':
+            self._initialize_memory_connections = True
+            return self
         self._init_db()
+        return self
 
     def _init_db(self):
         """
-        Initialize the SQLite database and create the tables if they don't exist.
+        Initialize the SQLite database and run pending migrations.
         """
         conn = None
         try:
@@ -134,219 +144,12 @@ class Database:
             # Enable foreign key support
             cursor.execute("PRAGMA foreign_keys = ON")
 
-            # Create job_executions table
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS job_executions (
-                    execution_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    job_id TEXT NOT NULL,
-                    step_id TEXT NOT NULL,
-                    input TEXT NOT NULL,
-                    max_pages INTEGER,
-                    use_tor BOOLEAN,
-                    headless BOOLEAN,
-                    status TEXT NOT NULL,
-                    current_row INTEGER,
-                    total_rows INTEGER,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    error_message TEXT,
-                    stop_call BOOLEAN DEFAULT FALSE,
-                    UNIQUE(job_id, step_id)
-                )
-            """)
+            cursor.execute("PRAGMA user_version")
+            user_version = cursor.fetchone()[0]
+            if user_version < CURRENT_SCHEMA_VERSION:
+                self._migrate_to_v1(cursor)
+                cursor.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
 
-            # Create leads table
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS leads (
-                    lead_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    execution_id INTEGER NOT NULL,
-                    place_id TEXT NOT NULL,
-                    location TEXT,
-                    name TEXT,
-                    address TEXT,
-                    phone TEXT,
-                    website TEXT,
-                    emails TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    status TEXT,
-                    UNIQUE(place_id),
-                    FOREIGN KEY (execution_id) REFERENCES job_executions(execution_id)
-                )
-            """)
-
-            cursor.execute("PRAGMA table_info(leads)")
-            lead_columns = {row[1] for row in cursor.fetchall()}
-            lead_review_columns = {
-                "lead_flag": "TEXT DEFAULT 'needs_review'",
-                "lead_status": "TEXT DEFAULT 'new'",
-                "notes": "TEXT",
-                "website_summary": "TEXT",
-                "summary_source_url": "TEXT",
-                "summary_status": "TEXT",
-                "summary_updated_at": "TIMESTAMP"
-            }
-            for column, definition in lead_review_columns.items():
-                if column not in lead_columns:
-                    cursor.execute(f"ALTER TABLE leads ADD COLUMN {column} {definition}")
-
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS lead_emails (
-                    email_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    lead_id INTEGER NOT NULL,
-                    email TEXT NOT NULL,
-                    category TEXT DEFAULT 'unknown',
-                    status TEXT DEFAULT 'new',
-                    is_primary BOOLEAN DEFAULT FALSE,
-                    notes TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(lead_id, email),
-                    FOREIGN KEY (lead_id) REFERENCES leads(lead_id) ON DELETE CASCADE
-                )
-            """)
-
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS email_category_rules (
-                    rule_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    pattern TEXT NOT NULL,
-                    match_type TEXT NOT NULL DEFAULT 'local_part_exact',
-                    category TEXT NOT NULL,
-                    is_active BOOLEAN DEFAULT TRUE,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(pattern, match_type)
-                )
-            """)
-
-            for pattern, category in DEFAULT_EMAIL_CATEGORY_RULES:
-                cursor.execute("""
-                    INSERT OR IGNORE INTO email_category_rules (
-                        pattern, match_type, category, is_active, updated_at
-                    ) VALUES (?, 'local_part_exact', ?, TRUE, CURRENT_TIMESTAMP)
-                """, (pattern, category))
-
-            cursor.execute("""
-                CREATE TRIGGER IF NOT EXISTS classify_lead_email_after_insert
-                AFTER INSERT ON lead_emails
-                WHEN NEW.category IS NULL OR NEW.category = '' OR NEW.category = 'unknown'
-                BEGIN
-                    UPDATE lead_emails
-                    SET category = (
-                        SELECT category
-                        FROM email_category_rules
-                        WHERE is_active = TRUE
-                          AND match_type = 'local_part_exact'
-                          AND pattern = LOWER(SUBSTR(NEW.email, 1, INSTR(NEW.email, '@') - 1))
-                        LIMIT 1
-                    ),
-                    updated_at = CURRENT_TIMESTAMP
-                    WHERE email_id = NEW.email_id
-                      AND EXISTS (
-                        SELECT 1
-                        FROM email_category_rules
-                        WHERE is_active = TRUE
-                          AND match_type = 'local_part_exact'
-                          AND pattern = LOWER(SUBSTR(NEW.email, 1, INSTR(NEW.email, '@') - 1))
-                      );
-                END
-            """)
-
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS campaigns (
-                    campaign_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL,
-                    business_type TEXT,
-                    search_location TEXT,
-                    filters_json TEXT,
-                    status TEXT DEFAULT 'draft',
-                    notes TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS campaign_leads (
-                    campaign_lead_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    campaign_id INTEGER NOT NULL,
-                    lead_id INTEGER NOT NULL,
-                    stage TEXT NOT NULL DEFAULT 'review',
-                    priority TEXT,
-                    email_draft TEXT,
-                    final_email TEXT,
-                    campaign_notes TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    contacted_at TIMESTAMP,
-                    UNIQUE(campaign_id, lead_id),
-                    FOREIGN KEY (campaign_id) REFERENCES campaigns(campaign_id) ON DELETE CASCADE,
-                    FOREIGN KEY (lead_id) REFERENCES leads(lead_id) ON DELETE CASCADE
-                )
-            """)
-
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS lead_discoveries (
-                    discovery_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    lead_id INTEGER NOT NULL,
-                    execution_id INTEGER NOT NULL,
-                    place_id TEXT NOT NULL,
-                    location TEXT,
-                    business_type TEXT,
-                    search_location TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(lead_id, execution_id),
-                    FOREIGN KEY (lead_id) REFERENCES leads(lead_id) ON DELETE CASCADE,
-                    FOREIGN KEY (execution_id) REFERENCES job_executions(execution_id) ON DELETE CASCADE
-                )
-            """)
-
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS app_settings (
-                    key TEXT PRIMARY KEY,
-                    value TEXT,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS business_type_email_rules (
-                    business_type TEXT PRIMARY KEY,
-                    business_description TEXT,
-                    pain_point TEXT,
-                    offer_angle TEXT,
-                    extra_instructions TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-
-            for key, value in DEFAULT_EMAIL_SETTINGS.items():
-                cursor.execute("""
-                    INSERT OR IGNORE INTO app_settings (key, value, updated_at)
-                    VALUES (?, ?, CURRENT_TIMESTAMP)
-                """, (key, value))
-
-            self._migrate_global_lead_uniqueness(cursor)
-
-            cursor.execute("""
-                SELECT lead_id, emails
-                FROM leads
-                WHERE emails IS NOT NULL AND TRIM(emails) != ''
-            """)
-            for lead_id, emails in cursor.fetchall():
-                parsed_emails = [
-                    email.strip()
-                    for email in str(emails).split(",")
-                    if email.strip()
-                ]
-                for index, email in enumerate(parsed_emails):
-                    cursor.execute("""
-                        INSERT OR IGNORE INTO lead_emails (
-                            lead_id, email, category, status, is_primary
-                        ) VALUES (?, ?, 'unknown', 'new', ?)
-                    """, (lead_id, email, index == 0))
             conn.commit()
             logging.info(f"Database initialized at {self.db_path}")
         except (sqlite3.Error, PermissionError, OSError) as e:
@@ -354,6 +157,248 @@ class Database:
         finally:
             if conn:
                 conn.close()
+
+    def _migrate_to_v1(self, cursor):
+        """Creates the current schema and migrates pre-versioned databases."""
+        # Create job_executions table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS job_executions (
+                execution_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL,
+                step_id TEXT NOT NULL,
+                input TEXT NOT NULL,
+                max_pages INTEGER,
+                use_tor BOOLEAN,
+                headless BOOLEAN,
+                status TEXT NOT NULL,
+                current_row INTEGER,
+                total_rows INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                error_message TEXT,
+                stop_call BOOLEAN DEFAULT FALSE,
+                UNIQUE(job_id, step_id)
+            )
+        """)
+        self._add_missing_columns(cursor, "job_executions", {
+            "max_pages": "INTEGER",
+            "use_tor": "BOOLEAN",
+            "headless": "BOOLEAN",
+            "current_row": "INTEGER",
+            "total_rows": "INTEGER",
+            "created_at": "TIMESTAMP",
+            "updated_at": "TIMESTAMP",
+            "error_message": "TEXT",
+            "stop_call": "BOOLEAN DEFAULT FALSE",
+        })
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS leads (
+                lead_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                execution_id INTEGER NOT NULL,
+                place_id TEXT NOT NULL,
+                location TEXT,
+                name TEXT,
+                address TEXT,
+                phone TEXT,
+                website TEXT,
+                emails TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                status TEXT,
+                UNIQUE(place_id),
+                FOREIGN KEY (execution_id) REFERENCES job_executions(execution_id)
+            )
+        """)
+
+        self._add_missing_columns(cursor, "leads", {
+            "location": "TEXT",
+            "name": "TEXT",
+            "address": "TEXT",
+            "phone": "TEXT",
+            "created_at": "TIMESTAMP",
+            "updated_at": "TIMESTAMP",
+            "lead_flag": "TEXT DEFAULT 'needs_review'",
+            "lead_status": "TEXT DEFAULT 'new'",
+            "notes": "TEXT",
+            "website_summary": "TEXT",
+            "summary_source_url": "TEXT",
+            "summary_status": "TEXT",
+            "summary_updated_at": "TIMESTAMP"
+        })
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS lead_emails (
+                email_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                lead_id INTEGER NOT NULL,
+                email TEXT NOT NULL,
+                category TEXT DEFAULT 'unknown',
+                status TEXT DEFAULT 'new',
+                is_primary BOOLEAN DEFAULT FALSE,
+                notes TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(lead_id, email),
+                FOREIGN KEY (lead_id) REFERENCES leads(lead_id) ON DELETE CASCADE
+            )
+        """)
+        self._add_missing_columns(cursor, "lead_emails", {
+            "category": "TEXT DEFAULT 'unknown'",
+            "status": "TEXT DEFAULT 'new'",
+            "is_primary": "BOOLEAN DEFAULT FALSE",
+            "notes": "TEXT",
+            "created_at": "TIMESTAMP",
+            "updated_at": "TIMESTAMP",
+        })
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS email_category_rules (
+                rule_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pattern TEXT NOT NULL,
+                match_type TEXT NOT NULL DEFAULT 'local_part_exact',
+                category TEXT NOT NULL,
+                is_active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(pattern, match_type)
+            )
+        """)
+
+        for pattern, category in DEFAULT_EMAIL_CATEGORY_RULES:
+            cursor.execute("""
+                INSERT OR IGNORE INTO email_category_rules (
+                    pattern, match_type, category, is_active, updated_at
+                ) VALUES (?, 'local_part_exact', ?, TRUE, CURRENT_TIMESTAMP)
+            """, (pattern, category))
+
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS classify_lead_email_after_insert
+            AFTER INSERT ON lead_emails
+            WHEN NEW.category IS NULL OR NEW.category = '' OR NEW.category = 'unknown'
+            BEGIN
+                UPDATE lead_emails
+                SET category = (
+                    SELECT category
+                    FROM email_category_rules
+                    WHERE is_active = TRUE
+                      AND match_type = 'local_part_exact'
+                      AND pattern = LOWER(SUBSTR(NEW.email, 1, INSTR(NEW.email, '@') - 1))
+                    LIMIT 1
+                ),
+                updated_at = CURRENT_TIMESTAMP
+                WHERE email_id = NEW.email_id
+                  AND EXISTS (
+                    SELECT 1
+                    FROM email_category_rules
+                    WHERE is_active = TRUE
+                      AND match_type = 'local_part_exact'
+                      AND pattern = LOWER(SUBSTR(NEW.email, 1, INSTR(NEW.email, '@') - 1))
+                  );
+            END
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS campaigns (
+                campaign_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                business_type TEXT,
+                search_location TEXT,
+                filters_json TEXT,
+                status TEXT DEFAULT 'draft',
+                notes TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self._add_missing_columns(cursor, "campaigns", {
+            "business_type": "TEXT",
+            "search_location": "TEXT",
+            "filters_json": "TEXT",
+            "status": "TEXT DEFAULT 'draft'",
+            "notes": "TEXT",
+            "created_at": "TIMESTAMP",
+            "updated_at": "TIMESTAMP",
+        })
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS campaign_leads (
+                campaign_lead_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                campaign_id INTEGER NOT NULL,
+                lead_id INTEGER NOT NULL,
+                stage TEXT NOT NULL DEFAULT 'review',
+                priority TEXT,
+                email_draft TEXT,
+                final_email TEXT,
+                campaign_notes TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                contacted_at TIMESTAMP,
+                UNIQUE(campaign_id, lead_id),
+                FOREIGN KEY (campaign_id) REFERENCES campaigns(campaign_id) ON DELETE CASCADE,
+                FOREIGN KEY (lead_id) REFERENCES leads(lead_id) ON DELETE CASCADE
+            )
+        """)
+        self._add_missing_columns(cursor, "campaign_leads", {
+            "priority": "TEXT",
+            "email_draft": "TEXT",
+            "final_email": "TEXT",
+            "campaign_notes": "TEXT",
+            "created_at": "TIMESTAMP",
+            "updated_at": "TIMESTAMP",
+            "contacted_at": "TIMESTAMP",
+        })
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS lead_discoveries (
+                discovery_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                lead_id INTEGER NOT NULL,
+                execution_id INTEGER NOT NULL,
+                place_id TEXT NOT NULL,
+                location TEXT,
+                business_type TEXT,
+                search_location TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(lead_id, execution_id),
+                FOREIGN KEY (lead_id) REFERENCES leads(lead_id) ON DELETE CASCADE,
+                FOREIGN KEY (execution_id) REFERENCES job_executions(execution_id) ON DELETE CASCADE
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS business_type_email_rules (
+                business_type TEXT PRIMARY KEY,
+                business_description TEXT,
+                pain_point TEXT,
+                offer_angle TEXT,
+                extra_instructions TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        for key, value in DEFAULT_EMAIL_SETTINGS.items():
+            cursor.execute("""
+                INSERT OR IGNORE INTO app_settings (key, value, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+            """, (key, value))
+
+        self._migrate_global_lead_uniqueness(cursor)
+
+    def _add_missing_columns(self, cursor, table_name, columns):
+        cursor.execute(f"PRAGMA table_info({table_name})")
+        existing_columns = {row[1] for row in cursor.fetchall()}
+        for column, definition in columns.items():
+            if column not in existing_columns:
+                cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column} {definition}")
 
     def _split_lead_location(self, location):
         """Parses stored lead location strings such as 'dentist:London, UK'."""
@@ -714,6 +759,9 @@ class Database:
         self.conn.row_factory = sqlite3.Row
         self.cursor = self.conn.cursor()
         self.cursor.execute("PRAGMA foreign_keys = ON")
+        if self.db_path == ':memory:' and self._initialize_memory_connections:
+            self._migrate_to_v1(self.cursor)
+            self.cursor.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -2116,7 +2164,7 @@ class Database:
             return []
 
 if __name__ == "__main__":
-    with Database() as db:
+    with Database().initialize() as db:
         leads = db.get_leads()
         if leads and len(leads) > 300:
             print(leads[300])

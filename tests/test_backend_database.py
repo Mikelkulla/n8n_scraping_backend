@@ -14,17 +14,25 @@ from backend.app_settings import Config
 def db():
     """Fixture to create an in-memory database for each test."""
     # Use :memory: for a clean, fast, in-memory database for each test
-    database = Database(db_path=':memory:')
+    database = Database(db_path=':memory:').initialize()
     yield database
 
 @pytest.fixture
 def temp_db(tmp_path):
     """Fixture to create a database in a temporary file."""
     db_path = tmp_path / "test.db"
-    database = Database(db_path=str(db_path))
+    database = Database(db_path=str(db_path)).initialize()
     yield database, str(db_path)
 
 class TestDatabase:
+    def test_constructor_does_not_create_database_file(self, tmp_path):
+        """Test that construction does not run schema initialization."""
+        db_path = tmp_path / "lazy.db"
+        database = Database(db_path=str(db_path))
+
+        assert database.db_path == str(db_path)
+        assert not db_path.exists()
+
     def test_init_db_with_path(self, temp_db):
         """Test that the database is created at the specified file path."""
         _, db_path = temp_db
@@ -103,7 +111,7 @@ class TestDatabase:
         conn.commit()
         conn.close()
 
-        Database(db_path=str(db_path))
+        Database(db_path=str(db_path)).initialize()
 
         migrated = sqlite3.connect(db_path)
         cursor = migrated.cursor()
@@ -388,7 +396,7 @@ class TestDatabase:
         conn.commit()
         conn.close()
 
-        Database(db_path=str(db_path))
+        Database(db_path=str(db_path)).initialize()
 
         with Database(db_path=str(db_path)) as migrated:
             leads = migrated.list_leads()
@@ -416,6 +424,50 @@ class TestDatabase:
 
             with pytest.raises(sqlite3.IntegrityError):
                 migrated.insert_lead(lead["execution_id"], "same-place", name="Still duplicate")
+
+    def test_initialize_twice_does_not_rerun_email_backfill(self, tmp_path):
+        """Test versioned initialization avoids repeated legacy email backfills."""
+        db_path = tmp_path / "versioned.db"
+        conn = sqlite3.connect(db_path)
+        conn.executescript("""
+            CREATE TABLE job_executions (
+                execution_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL,
+                step_id TEXT NOT NULL,
+                input TEXT NOT NULL,
+                status TEXT NOT NULL,
+                UNIQUE(job_id, step_id)
+            );
+            CREATE TABLE leads (
+                lead_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                execution_id INTEGER NOT NULL,
+                place_id TEXT NOT NULL,
+                website TEXT,
+                emails TEXT,
+                status TEXT
+            );
+        """)
+        conn.execute("INSERT INTO job_executions (job_id, step_id, input, status) VALUES ('job1', 'google_maps_scrape', 'input', 'completed')")
+        conn.execute("INSERT INTO leads (execution_id, place_id, emails) VALUES (1, 'place1', 'info@example.com')")
+        conn.commit()
+        conn.close()
+
+        Database(db_path=str(db_path)).initialize()
+        with Database(db_path=str(db_path)) as db:
+            db.cursor.execute("SELECT COUNT(*) AS count FROM lead_emails")
+            assert db.cursor.fetchone()["count"] == 1
+            db.cursor.execute("UPDATE lead_emails SET category = 'sales', notes = 'reviewed'")
+
+        Database(db_path=str(db_path)).initialize()
+        with Database(db_path=str(db_path)) as db:
+            db.cursor.execute("PRAGMA user_version")
+            assert db.cursor.fetchone()[0] == 1
+            db.cursor.execute("SELECT COUNT(*) AS count FROM lead_emails")
+            assert db.cursor.fetchone()["count"] == 1
+            db.cursor.execute("SELECT category, notes FROM lead_emails WHERE email = 'info@example.com'")
+            email = db.cursor.fetchone()
+            assert email["category"] == "sales"
+            assert email["notes"] == "reviewed"
 
     def test_google_places_upsert_updates_source_fields_and_preserves_manual_fields(self, temp_db):
         """Test rediscovery updates canonical source fields without overwriting manual data."""
@@ -716,7 +768,7 @@ class TestDatabase:
         """Test that a PermissionError is logged if the directory is not writable."""
         db_path = "/nonexistent/path/test.db"
         with patch('os.makedirs'):
-            Database(db_path=db_path)
+            Database(db_path=db_path).initialize()
             mock_os_access.assert_called()
             assert mock_logging_error.call_count > 0
             assert "Failed to initialize database" in mock_logging_error.call_args[0][0]
