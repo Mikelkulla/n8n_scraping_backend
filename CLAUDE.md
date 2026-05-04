@@ -526,7 +526,6 @@ The left navigation sidebar can collapse/expand through the small top-left icon.
 
 ## Known Tech Debt and Limitations
 
-- `update_job_status()` in `config/job_functions.py` still writes JSON tracking files alongside the DB. This is legacy tracking and marked for deprecation. New code should use the `Database` class.
 - No authentication is implemented. This is fine for local personal use, but do not expose publicly without auth, request caps, and rate limiting.
 - `/api/scrape/google-maps` is synchronous in code, despite some older README/Postman wording saying async.
 - `radius` is accepted by `/api/scrape/google-maps` but ignored by the current Google Places Text Search implementation.

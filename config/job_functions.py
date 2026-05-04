@@ -1,7 +1,4 @@
-import os
-import json
 import logging
-from backend.app_settings import Config
 from backend.database import Database
 
 # Modifying the job processes in the Database. (New Logic)
@@ -54,48 +51,9 @@ def write_progress(job_id, step_id, input, max_pages=None, use_tor=None, headles
         else:
             with Database() as db:
                 _write_to_db(db)
-                
-        update_job_status(step_id, job_id, status)
         logging.info(f"Progress updated for job {job_id} ({step_id}): input {input}, row {current_row}/{total_rows}, status: {status}")
     except Exception as e:
         logging.error(f"Failed to write progress for job {job_id} ({step_id}): {e}")
-
-# This function is for JSON files tracking (Old logic to be deprecated)
-def update_job_status(step_id, job_id, status):
-    """Updates the status of a job in a JSON tracking file.
-
-    Note:
-        This function is part of an older system for tracking jobs and is planned
-        for deprecation. Job status is primarily managed in the database.
-
-    Args:
-        step_id (str): The identifier for the step (e.g., 'email_scrape').
-        job_id (str): The unique identifier of the job.
-        status (str): The new status to set (e.g., 'running', 'completed',
-            'stopped').
-    """
-    jobs_file = os.path.join(Config.TEMP_PATH, f"jobs_{step_id}.json")
-    try:
-        os.makedirs(Config.TEMP_PATH, exist_ok=True)
-        if os.path.exists(jobs_file):
-            with open(jobs_file, "r") as f:
-                jobs = json.load(f)
-        else:
-            jobs = []
-        job_updated = False
-        for job in jobs:
-            if job["job_id"] == job_id:
-                job["status"] = status
-                job_updated = True
-                break
-        if not job_updated:
-            # Optionally add new job if it doesn't exist
-            jobs.append({'step_id': step_id, "job_id": job_id, "status": status})
-        # Write back to file
-        with open(jobs_file, "w") as f:
-            json.dump(jobs, f, indent=2)
-    except Exception as e:
-        print(f"Error updating job status for step {step_id}, job {job_id}: {e}")
 
 def check_stop_signal(job_id, step_id, db_connection=None):
     """Checks whether a specific job has received a stop signal.

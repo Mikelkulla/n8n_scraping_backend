@@ -1,20 +1,10 @@
-import os
-import json
-import pytest
 from unittest.mock import patch, MagicMock
 
-from config.job_functions import write_progress, update_job_status, check_stop_signal
-
-@pytest.fixture
-def temp_dir(tmp_path):
-    """Create a temporary directory for tests."""
-    # Mock Config.TEMP_PATH to use the temporary directory
-    with patch('config.job_functions.Config.TEMP_PATH', str(tmp_path)):
-        yield str(tmp_path)
+from config.job_functions import write_progress, check_stop_signal
 
 class TestJobFunctions:
     @patch('config.job_functions.Database')
-    def test_write_progress_insert_new_job(self, mock_db_class, temp_dir):
+    def test_write_progress_insert_new_job(self, mock_db_class):
         """Test that a new job is inserted when no record exists."""
         mock_db_instance = MagicMock()
         mock_db_instance.get_job_execution.return_value = None
@@ -38,7 +28,7 @@ class TestJobFunctions:
         mock_db_instance.update_job_execution.assert_not_called()
 
     @patch('config.job_functions.Database')
-    def test_write_progress_update_existing_job(self, mock_db_class, temp_dir):
+    def test_write_progress_update_existing_job(self, mock_db_class):
         """Test that an existing job is updated."""
         mock_db_instance = MagicMock()
         mock_db_instance.get_job_execution.return_value = {"job_id": "job1", "step_id": "step1"}
@@ -60,7 +50,7 @@ class TestJobFunctions:
         mock_db_instance.insert_job_execution.assert_not_called()
 
     @patch('config.job_functions.Database')
-    def test_write_progress_status_completed(self, mock_db_class, temp_dir):
+    def test_write_progress_status_completed(self, mock_db_class):
         """Test that status is 'completed' when current_row >= total_rows."""
         mock_db_instance = MagicMock()
         mock_db_instance.get_job_execution.return_value = {"job_id": "job1", "step_id": "step1"}
@@ -79,7 +69,7 @@ class TestJobFunctions:
         )
 
     @patch('config.job_functions.Database')
-    def test_write_progress_status_stopped(self, mock_db_class, temp_dir):
+    def test_write_progress_status_stopped(self, mock_db_class):
         """Test that status is 'stopped' when stop_call is True."""
         mock_db_instance = MagicMock()
         mock_db_instance.get_job_execution.return_value = {"job_id": "job1", "step_id": "step1"}
@@ -96,7 +86,7 @@ class TestJobFunctions:
             "job1", "step1", current_row=None, total_rows=None, status="stopped", stop_call=True, error_message=None
         )
 
-    def test_write_progress_with_db_connection(self, temp_dir):
+    def test_write_progress_with_db_connection(self):
         """Test that an existing db_connection is used."""
         mock_db_connection = MagicMock()
         mock_db_connection.get_job_execution.return_value = None
@@ -113,7 +103,7 @@ class TestJobFunctions:
 
     @patch('config.job_functions.Database')
     @patch('config.job_functions.logging')
-    def test_write_progress_exception(self, mock_logging, mock_db_class, temp_dir):
+    def test_write_progress_exception(self, mock_logging, mock_db_class):
         """Test exception handling during database operation."""
         mock_db_instance = MagicMock()
         mock_db_instance.get_job_execution.side_effect = Exception("DB error")
@@ -123,47 +113,22 @@ class TestJobFunctions:
 
         mock_logging.error.assert_called_with("Failed to write progress for job job1 (step1): DB error")
 
-    def test_update_job_status_create_new_file(self, temp_dir):
-        """Test that a new jobs file is created."""
-        jobs_file = os.path.join(temp_dir, "jobs_step1.json")
-        update_job_status("step1", "job1", "running")
+    @patch('builtins.open')
+    @patch('config.job_functions.Database')
+    def test_write_progress_does_not_create_json_progress_file(self, mock_db_class, mock_open):
+        """Test that progress writes only use the database, not jobs_*.json files."""
+        mock_db_instance = MagicMock()
+        mock_db_instance.get_job_execution.return_value = None
+        mock_db_class.return_value.__enter__.return_value = mock_db_instance
 
-        assert os.path.exists(jobs_file)
-        with open(jobs_file, "r") as f:
-            jobs = json.load(f)
-        assert jobs == [{"step_id": "step1", "job_id": "job1", "status": "running"}]
+        write_progress(
+            job_id="job1",
+            step_id="step1",
+            input="test_input",
+            status="running",
+        )
 
-    def test_update_job_status_update_existing_job(self, temp_dir):
-        """Test that an existing job's status is updated."""
-        jobs_file = os.path.join(temp_dir, "jobs_step1.json")
-        with open(jobs_file, "w") as f:
-            json.dump([{"step_id": "step1", "job_id": "job1", "status": "running"}], f)
-
-        update_job_status("step1", "job1", "completed")
-
-        with open(jobs_file, "r") as f:
-            jobs = json.load(f)
-        assert jobs == [{"step_id": "step1", "job_id": "job1", "status": "completed"}]
-
-    def test_update_job_status_add_new_job(self, temp_dir):
-        """Test that a new job is added to an existing file."""
-        jobs_file = os.path.join(temp_dir, "jobs_step1.json")
-        with open(jobs_file, "w") as f:
-            json.dump([{"step_id": "step1", "job_id": "job1", "status": "running"}], f)
-
-        update_job_status("step1", "job2", "running")
-
-        with open(jobs_file, "r") as f:
-            jobs = json.load(f)
-        assert len(jobs) == 2
-        assert {"step_id": "step1", "job_id": "job2", "status": "running"} in jobs
-
-    @patch('builtins.open', side_effect=Exception('File error'))
-    @patch('builtins.print')
-    def test_update_job_status_exception(self, mock_print, mock_open, temp_dir):
-        """Test exception handling during file operation."""
-        update_job_status("step1", "job1", "running")
-        mock_print.assert_called_with("Error updating job status for step step1, job job1: File error")
+        mock_open.assert_not_called()
 
     @patch('config.job_functions.Database')
     def test_check_stop_signal_true_for_matching_job(self, mock_db_class):
