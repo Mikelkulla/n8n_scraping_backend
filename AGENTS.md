@@ -129,7 +129,7 @@ User action in React page
 |------|------|
 | `backend/app.py` | Flask app creation, root health route, API blueprint registration, UTF-8 tolerant stdout/stderr setup |
 | `backend/routes/api.py` | All REST endpoints for scraping, jobs, leads, summary, export |
-| `backend/database.py` | `Database` class, SQLite schema, context manager, thread-safe lock, query methods for jobs, leads, email review, and campaigns |
+| `backend/database.py` | `Database` class, explicit SQLite initialization/migrations, context manager, thread-safe lock, query methods for jobs, leads, email review, and campaigns |
 | `backend/app_settings.py` | `Config` class for paths, env vars, driver locations, log settings |
 | `backend/ai_email_service.py` | Provider-neutral AI email draft generation wrapper for OpenAI and Anthropic |
 | `config/job_functions.py` | `write_progress()` upserts job state; `check_stop_signal()` reads DB stop flag |
@@ -152,6 +152,14 @@ User action in React page
 ## Database Schema
 
 SQLite database path: `backend/temp/scraping.db`.
+
+Initialization behavior:
+- `Database()` construction is intentionally cheap. It only resolves the database path and instance fields.
+- Schema creation, seed data, and data migrations run through `Database().initialize()`.
+- `backend/app.py` calls `Database().initialize()` once at Flask startup after `Config.init_dirs()`.
+- Tests that create temporary databases must call `Database(db_path=...).initialize()` before opening the DB with the context manager.
+- Migrations use SQLite `PRAGMA user_version`. Version `1` creates the current schema, seeds default settings/category rules, migrates global lead uniqueness/discovery history, and backfills legacy comma-separated `leads.emails` values into `lead_emails`.
+- Request/progress hot paths such as `write_progress()`, `check_stop_signal()`, route handlers, and polling endpoints should construct `Database()` without rerunning schema setup or global backfills.
 
 ### `job_executions`
 
@@ -188,7 +196,7 @@ Uniqueness:
 - Leads are globally unique by `place_id`.
 
 Migration behavior:
-- Existing duplicate lead rows with the same `place_id` are merged during database initialization.
+- Existing duplicate lead rows with the same `place_id` are merged during versioned database initialization.
 - Campaign memberships, normalized emails, notes, review fields, scrape status, and website context are preserved on the canonical lead when possible.
 - Google Places rediscovery only refreshes source-owned fields such as `location`, `name`, `address`, `phone`, and `website`; it does not overwrite emails, review fields, notes, campaigns, or website summaries.
 
@@ -729,7 +737,7 @@ Normalized email review table:
 - `lead_emails.is_primary`
 - `lead_emails.notes`
 
-Existing comma-separated `leads.emails` data is backfilled into `lead_emails` during DB initialization. The old `leads.emails` field remains for compatibility and CSV export. When normalized email rows are added, updated, or deleted, `leads.emails` is synced from usable rows, excluding `invalid` and `do_not_use`.
+Existing comma-separated `leads.emails` data is backfilled into `lead_emails` by the versioned DB initialization migration. The old `leads.emails` field remains for compatibility and CSV export. When normalized email rows are added, updated, or deleted, `leads.emails` is synced from usable rows, excluding `invalid` and `do_not_use`.
 
 Additional endpoints:
 - `GET /api/leads/<lead_id>/emails`

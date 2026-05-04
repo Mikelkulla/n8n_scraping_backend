@@ -14,10 +14,12 @@ def create_test_client(db_path):
     app = Flask(__name__)
     app.register_blueprint(api_bp, url_prefix="/api")
     app.config["TESTING"] = True
+    Database(db_path=db_path).initialize()
     return app.test_client(), lambda: Database(db_path=db_path)
 
 
 def seed_campaign_lead(db_path, stage="review", emails="hello@example.com", lead_status="new", final_email=None):
+    Database(db_path=db_path).initialize()
     with Database(db_path=db_path) as db:
         db.insert_job_execution("job1", "google_maps_scrape", "dentist:London, UK", status="completed")
         execution = db.get_job_execution("job1", "google_maps_scrape")
@@ -120,6 +122,7 @@ def test_generate_email_reports_missing_api_key(tmp_path):
 
 def test_email_category_rule_routes_apply_unknowns(tmp_path):
     db_path = str(tmp_path / "test.db")
+    Database(db_path=db_path).initialize()
     with Database(db_path=db_path) as db:
         db.insert_job_execution("job1", "google_maps_scrape", "hotel:Tirana", status="completed")
         execution = db.get_job_execution("job1", "google_maps_scrape")

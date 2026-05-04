@@ -14,6 +14,7 @@ for stream in (sys.stdout, sys.stderr):
 from flask import Flask, jsonify
 from backend.routes.api import api_bp
 from backend.app_settings import Config
+from backend.database import Database
 from config.logging import setup_logging
 
 app = Flask(__name__)
@@ -21,6 +22,10 @@ app.config.from_object(Config)
 
 # Initialize directories
 Config.init_dirs()
+
+# Run schema creation and migrations once at startup. Database construction is
+# intentionally cheap for request/progress hot paths.
+Database().initialize()
 
 # Register API blueprint
 app.register_blueprint(api_bp, url_prefix="/api")
