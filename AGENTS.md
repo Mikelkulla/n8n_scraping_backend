@@ -330,7 +330,7 @@ All API endpoints are mounted under `/api`, except Flask root health check `/`.
 | `GET` | `/api/campaigns/<campaign_id>/leads` | List campaign leads joined to lead data | Filters: `stage`, `lead_flag`, `lead_status`, `has_email`, `has_website`, `search` |
 | `PATCH` | `/api/campaign-leads/<campaign_lead_id>` | Update campaign lead workflow fields | Editable: `stage`, `priority`, `email_draft`, `final_email`, `campaign_notes`, `contacted_at` |
 | `POST` | `/api/campaign-leads/<campaign_lead_id>/generate-email` | Generate one AI email draft for a campaign lead | Stores result in `email_draft`; does not overwrite `final_email` |
-| `POST` | `/api/campaigns/<campaign_id>/generate-emails` | Batch-generate AI drafts for eligible campaign leads | Body supports optional `stage`, `search`, `limit`; no automatic sending |
+| `POST` | `/api/campaigns/<campaign_id>/generate-emails` | Batch-generate AI drafts for eligible campaign leads | Body supports optional `stage`, `search`, `limit`; no automatic sending; skips approved/contacted/final workflow stages |
 | `GET` | `/api/campaigns/<campaign_id>/export` | Export campaign leads | Default CSV; `?format=json`; optional `stage` filter |
 | `GET` | `/api/email-settings` | Read AI email drafting settings | Includes `api_key_configured`, never returns API keys |
 | `PATCH` | `/api/email-settings` | Update AI email drafting settings | Editable: `provider`, `model`, `system_prompt`, `user_prompt` |
@@ -671,6 +671,12 @@ Supports:
 - Row click expands/collapses job progress details directly below the selected row; there is no persistent empty side panel.
 - Progress details from `/api/progress/<job_id>`.
 - Stop action for running jobs.
+
+### Campaigns Page
+
+Supports:
+- `Generate visible drafts` batch-generates drafts for the current visible campaign lead filter/search set, capped by the request limit. It skips approved leads and final workflow stages (`contacted`, `replied`, `closed`, `skipped`, `do_not_contact`) so approved copy is not accidentally regenerated in bulk.
+- The per-lead expanded `Generate draft` button can still regenerate an approved lead draft intentionally. Generated drafts never overwrite `final_email`.
 
 ### Dashboard
 

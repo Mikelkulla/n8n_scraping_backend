@@ -28,11 +28,12 @@ def _has_usable_email(lead):
     return bool(_clean(lead.get("primary_email") or lead.get("emails")))
 
 
-def validate_generation_target(lead):
+def validate_generation_target(lead, extra_blocked_stages=None):
     """Validates whether a campaign lead can receive an AI draft."""
+    blocked_stages = BLOCKED_GENERATION_STAGES | set(extra_blocked_stages or [])
     if not lead:
         raise EmailGenerationBlocked("Campaign lead not found")
-    if lead.get("stage") in BLOCKED_GENERATION_STAGES:
+    if lead.get("stage") in blocked_stages:
         raise EmailGenerationBlocked(f"Cannot generate email for lead in stage '{lead.get('stage')}'")
     if _clean(lead.get("lead_status")) == "do_not_contact":
         raise EmailGenerationBlocked("Cannot generate email for a do-not-contact lead")

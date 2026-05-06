@@ -95,6 +95,39 @@ def test_generate_email_saves_draft_without_overwriting_final(tmp_path):
     assert payload["stage"] == "drafted"
 
 
+def test_generate_email_allows_approved_lead_manual_regeneration(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    _, campaign_lead_id = seed_campaign_lead(db_path, stage="approved", final_email="Final approved")
+    client, db_factory = create_test_client(db_path)
+
+    with patch("backend.routes.api.Database", side_effect=db_factory):
+        with patch("backend.routes.api.generate_email_draft", return_value="Generated draft"):
+            response = client.post(f"/api/campaign-leads/{campaign_lead_id}/generate-email")
+
+    assert response.status_code == 200
+    payload = response.get_json()["campaign_lead"]
+    assert payload["email_draft"] == "Generated draft"
+    assert payload["final_email"] == "Final approved"
+    assert payload["stage"] == "approved"
+
+
+def test_bulk_generate_emails_skips_approved_leads(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    campaign_id, _ = seed_campaign_lead(db_path, stage="approved", final_email="Final approved")
+    client, db_factory = create_test_client(db_path)
+
+    with patch("backend.routes.api.Database", side_effect=db_factory):
+        with patch("backend.routes.api.generate_email_draft", return_value="Generated draft") as generate:
+            response = client.post(f"/api/campaigns/{campaign_id}/generate-emails", json={"limit": 25})
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["generated_count"] == 0
+    assert payload["skipped_count"] == 1
+    assert "approved" in payload["skipped"][0]["reason"]
+    generate.assert_not_called()
+
+
 def test_generate_email_blocks_do_not_contact(tmp_path):
     db_path = str(tmp_path / "test.db")
     _, campaign_lead_id = seed_campaign_lead(db_path, stage="do_not_contact")

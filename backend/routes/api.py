@@ -21,6 +21,7 @@ api_bp = Blueprint("api", __name__)
 
 # Dictionary to track active scraping threads
 active_jobs = {}
+BULK_EMAIL_GENERATION_EXTRA_BLOCKED_STAGES = {"approved"}
 
 def _scrape_and_store_lead_enrichment(
     lead,
@@ -973,7 +974,10 @@ def generate_campaign_emails(campaign_id):
 
         for lead in leads[:limit]:
             try:
-                validate_generation_target(lead)
+                validate_generation_target(
+                    lead,
+                    extra_blocked_stages=BULK_EMAIL_GENERATION_EXTRA_BLOCKED_STAGES,
+                )
                 rule = rules_by_business_type.get(lead.get("business_type"))
                 draft = generate_email_draft(lead, settings, rule)
                 with Database() as db:
