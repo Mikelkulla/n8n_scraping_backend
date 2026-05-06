@@ -26,9 +26,10 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { ApiError, type BusinessTypeEmailRule, type Campaign, type CampaignLead, type JobExecution, type JobStatus, type JobStepId, type Lead, type LeadEmail } from "./api";
+import { ApiError, type AppSettings, type BusinessTypeEmailRule, type Campaign, type CampaignLead, type JobExecution, type JobStatus, type JobStepId, type Lead, type LeadEmail } from "./api";
 import {
   useAddLeadEmail,
+  useAppSettings,
   useBackendHealth,
   useCampaign,
   useCampaignLeads,
@@ -52,6 +53,7 @@ import {
   useSummary,
   useUnknownEmailLocalParts,
   useUpdateBusinessTypeEmailRule,
+  useUpdateAppSettings,
   useUpdateCampaign,
   useUpdateCampaignLead,
   useUpdateEmailCategoryRule,
@@ -81,6 +83,20 @@ const leadStatuses = ["new", "reviewed", "ready", "contacted", "do_not_contact"]
 const emailStatuses = ["new", "valid", "invalid", "do_not_use"];
 const emailCategories = ["unknown", "booking", "info", "sales", "support", "accounting", "finance", "events", "hr", "marketing", "manager", "reception"];
 const campaignStatuses = ["draft", "active", "paused", "completed", "archived"];
+const logLevels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"];
+const openAiModels = ["gpt-5.1", "gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano"];
+const anthropicModels = ["claude-opus-4-1-20250805", "claude-opus-4-20250514", "claude-sonnet-4-20250514", "claude-3-7-sonnet-20250219", "claude-3-5-haiku-20241022"];
+const defaultAppSettings: AppSettings = {
+  log_level: "INFO",
+  scraper_max_pages: 30,
+  scraper_sitemap_limit: 10,
+  scraper_headless: true,
+  scraper_use_tor: false,
+  scraper_max_threads: 5,
+  places_place_type: "lodging",
+  places_max_places: 20,
+  places_radius: 300,
+};
 
 const pagePaths: Record<PageId, string> = {
   dashboard: "/dashboard",
@@ -876,18 +892,23 @@ function DashboardPage() {
 
 function DiscoverPage() {
   const scrape = useGoogleMapsScrape();
+  const appSettings = useAppSettings();
   const { searchParams, setParam } = useUrlState();
+  const defaults = appSettings.data?.settings ?? defaultAppSettings;
   const location = getSearchString(searchParams, "location");
-  const placeType = getSearchString(searchParams, "place_type", "lodging");
-  const maxPlaces = getSearchNumber(searchParams, "max_places", 20);
+  const placeType = getSearchString(searchParams, "place_type", defaults.places_place_type);
+  const maxPlaces = getSearchNumber(searchParams, "max_places", defaults.places_max_places);
+  const radius = getSearchNumber(searchParams, "radius", defaults.places_radius);
   const setLocation = (value: string) => setParam("location", value);
   const setPlaceType = (value: string) => setParam("place_type", value);
   const setMaxPlaces = (value: number) => setParam("max_places", value);
+  const setRadius = (value: number) => setParam("radius", value);
 
   function submit(event: FormEvent) {
     event.preventDefault();
     scrape.mutate({
       location,
+      radius,
       place_type: placeType,
       max_places: maxPlaces,
     });
@@ -925,6 +946,15 @@ function DiscoverPage() {
             onChange={(event) => setMaxPlaces(Number(event.target.value))}
           />
         </Field>
+        <Field label="Radius">
+          <input
+            min={1}
+            max={50000}
+            type="number"
+            value={radius}
+            onChange={(event) => setRadius(Number(event.target.value))}
+          />
+        </Field>
         <button type="submit" disabled={scrape.isPending}>
           {scrape.isPending ? <Loader2 className="spin" size={17} /> : <Search size={17} />}
           Search
@@ -949,12 +979,14 @@ function DiscoverPage() {
 
 function WebsiteEmailPage() {
   const scrape = useWebsiteEmailScrape();
+  const appSettings = useAppSettings();
   const { searchParams, setParam } = useUrlState();
+  const defaults = appSettings.data?.settings ?? defaultAppSettings;
   const url = getSearchString(searchParams, "url");
-  const maxPages = getSearchNumber(searchParams, "max_pages", 10);
-  const sitemapLimit = getSearchNumber(searchParams, "sitemap_limit", 10);
-  const headless = getSearchBooleanString(searchParams, "headless", "true") !== "false";
-  const useTor = getSearchBooleanString(searchParams, "use_tor", "false") === "true";
+  const maxPages = getSearchNumber(searchParams, "max_pages", defaults.scraper_max_pages);
+  const sitemapLimit = getSearchNumber(searchParams, "sitemap_limit", defaults.scraper_sitemap_limit);
+  const headless = getSearchBooleanString(searchParams, "headless", String(defaults.scraper_headless)) !== "false";
+  const useTor = getSearchBooleanString(searchParams, "use_tor", String(defaults.scraper_use_tor)) === "true";
   const setUrl = (value: string) => setParam("url", value);
   const setMaxPages = (value: number) => setParam("max_pages", value);
   const setSitemapLimit = (value: number) => setParam("sitemap_limit", value);
@@ -1249,11 +1281,13 @@ function JobsPage() {
 
 function EnrichPage() {
   const enrich = useLeadEmailEnrichment();
+  const appSettings = useAppSettings();
   const { searchParams, setParam } = useUrlState();
+  const defaults = appSettings.data?.settings ?? defaultAppSettings;
   const jobId = getSearchString(searchParams, "job_id") || undefined;
-  const maxPages = getSearchNumber(searchParams, "max_pages", 30);
-  const headless = getSearchBooleanString(searchParams, "headless", "true") !== "false";
-  const useTor = getSearchBooleanString(searchParams, "use_tor", "false") === "true";
+  const maxPages = getSearchNumber(searchParams, "max_pages", defaults.scraper_max_pages);
+  const headless = getSearchBooleanString(searchParams, "headless", String(defaults.scraper_headless)) !== "false";
+  const useTor = getSearchBooleanString(searchParams, "use_tor", String(defaults.scraper_use_tor)) === "true";
   const setJobId = (value?: string) => setParam("job_id", value ?? "", { replace: false });
   const setMaxPages = (value: number) => setParam("max_pages", value);
   const setHeadless = (value: boolean) => setParam("headless", value);
@@ -2876,27 +2910,71 @@ function SettingsBusinessRuleEditor({
 function SettingsPage() {
   const emailSettings = useEmailSettings();
   const updateEmailSettings = useUpdateEmailSettings();
+  const appSettings = useAppSettings();
+  const updateAppSettings = useUpdateAppSettings();
   const leadFilterOptions = useLeadFilterOptions();
   const businessRules = useBusinessTypeEmailRules();
   const updateBusinessRule = useUpdateBusinessTypeEmailRule();
   const [provider, setProvider] = useState("openai");
   const [model, setModel] = useState("");
+  const [customModel, setCustomModel] = useState("");
+  const [useCustomModel, setUseCustomModel] = useState(false);
   const [systemPrompt, setSystemPrompt] = useState("");
   const [userPrompt, setUserPrompt] = useState("");
+  const [appDraft, setAppDraft] = useState<AppSettings>(defaultAppSettings);
+
+  const providerModels = provider === "anthropic" ? anthropicModels : openAiModels;
+  const selectedModelValue = useCustomModel || !providerModels.includes(model) ? "__custom__" : model;
 
   useEffect(() => {
     if (!emailSettings.data?.settings) return;
     setProvider(emailSettings.data.settings.provider);
     setModel(emailSettings.data.settings.model);
+    setCustomModel(emailSettings.data.settings.model);
+    setUseCustomModel(![
+      ...openAiModels,
+      ...anthropicModels,
+    ].includes(emailSettings.data.settings.model));
     setSystemPrompt(emailSettings.data.settings.system_prompt);
     setUserPrompt(emailSettings.data.settings.user_prompt);
   }, [emailSettings.data?.settings]);
+
+  useEffect(() => {
+    if (!appSettings.data?.settings) return;
+    setAppDraft(appSettings.data.settings);
+  }, [appSettings.data?.settings]);
+
+  function setAppSetting<K extends keyof AppSettings>(key: K, value: AppSettings[K]) {
+    setAppDraft((current) => ({ ...current, [key]: value }));
+  }
+
+  function changeProvider(value: string) {
+    const nextProvider = value === "anthropic" ? "anthropic" : "openai";
+    const nextModels = nextProvider === "anthropic" ? anthropicModels : openAiModels;
+    setProvider(nextProvider);
+    setUseCustomModel(false);
+    setModel(nextModels[0]);
+    setCustomModel(nextModels[0]);
+  }
+
+  function changeModel(value: string) {
+    if (value === "__custom__") {
+      setUseCustomModel(true);
+      setModel(customModel || "");
+    } else {
+      setUseCustomModel(false);
+      setModel(value);
+      setCustomModel(value);
+    }
+  }
+
+  const effectiveModel = useCustomModel ? customModel : model;
 
   return (
     <>
       <PageHeader
         title="Settings"
-        description="AI drafting defaults and business-type personalization for campaign outreach."
+        description="Operational defaults, logging, AI drafting, and business-type personalization."
       />
       <section className="panel">
         <div className="section-head">
@@ -2912,13 +2990,32 @@ function SettingsPage() {
         ) : (
           <div className="settings-form">
             <Field label="Provider">
-              <select value={provider} onChange={(event) => setProvider(event.target.value)}>
+              <select value={provider} onChange={(event) => changeProvider(event.target.value)}>
                 <option value="openai">OpenAI</option>
                 <option value="anthropic">Anthropic</option>
               </select>
             </Field>
             <Field label="Model">
-              <input value={model} onChange={(event) => setModel(event.target.value)} placeholder="gpt-4o-mini" />
+              <select value={selectedModelValue} onChange={(event) => changeModel(event.target.value)}>
+                {providerModels.map((option) => (
+                  <option key={option} value={option}>{option}</option>
+                ))}
+                <option value="__custom__">Custom model ID</option>
+              </select>
+            </Field>
+            {selectedModelValue === "__custom__" && (
+              <Field label="Custom model ID">
+                <input value={customModel} onChange={(event) => {
+                  setCustomModel(event.target.value);
+                  setModel(event.target.value);
+                }} placeholder={provider === "anthropic" ? "claude-..." : "gpt-..."} />
+              </Field>
+            )}
+            <Field label="API status">
+              <input
+                readOnly
+                value={emailSettings.data?.settings.api_key_configured ? "Configured" : "Missing in .env"}
+              />
             </Field>
             <Field label="System prompt" className="detail-wide">
               <AutoResizeTextarea value={systemPrompt} onChange={(event) => setSystemPrompt(event.target.value)} />
@@ -2928,10 +3025,10 @@ function SettingsPage() {
             </Field>
             <button
               type="button"
-              disabled={updateEmailSettings.isPending || !model.trim() || !systemPrompt.trim() || !userPrompt.trim()}
+              disabled={updateEmailSettings.isPending || !effectiveModel.trim() || !systemPrompt.trim() || !userPrompt.trim()}
               onClick={() => updateEmailSettings.mutate({
                 provider: provider === "anthropic" ? "anthropic" : "openai",
-                model,
+                model: effectiveModel,
                 system_prompt: systemPrompt,
                 user_prompt: userPrompt,
               })}
@@ -2943,6 +3040,125 @@ function SettingsPage() {
           </div>
         )}
       </section>
+      <section className="panel">
+        <div className="section-head">
+          <div>
+            <h2>Application logging</h2>
+            <p>{appSettings.data?.environment.log_path ?? "Log path unavailable"}</p>
+          </div>
+        </div>
+        {appSettings.isLoading ? (
+          <div className="muted">Loading app settings...</div>
+        ) : appSettings.isError ? (
+          <ErrorAlert error={appSettings.error} />
+        ) : (
+          <div className="settings-form">
+            <Field label="Logging verbosity">
+              <select value={appDraft.log_level} onChange={(event) => setAppSetting("log_level", event.target.value)}>
+                {logLevels.map((level) => <option key={level} value={level}>{level}</option>)}
+              </select>
+            </Field>
+            <Field label="Temp data path">
+              <input readOnly value={appSettings.data?.environment.temp_path ?? ""} />
+            </Field>
+            <button
+              type="button"
+              disabled={updateAppSettings.isPending}
+              onClick={() => updateAppSettings.mutate({ log_level: appDraft.log_level })}
+            >
+              {updateAppSettings.isPending ? <Loader2 className="spin" size={17} /> : <CheckCircle2 size={17} />}
+              Save logging
+            </button>
+          </div>
+        )}
+      </section>
+      <section className="panel">
+        <div className="section-head">
+          <div>
+            <h2>Scraping defaults</h2>
+            <p>Used when scrape pages do not already have URL parameters.</p>
+          </div>
+        </div>
+        <div className="settings-form">
+          <Field label="Max pages">
+            <input min={1} max={100} type="number" value={appDraft.scraper_max_pages} onChange={(event) => setAppSetting("scraper_max_pages", Number(event.target.value))} />
+          </Field>
+          <Field label="Sitemap limit">
+            <input min={1} max={50} type="number" value={appDraft.scraper_sitemap_limit} onChange={(event) => setAppSetting("scraper_sitemap_limit", Number(event.target.value))} />
+          </Field>
+          <Field label="Max worker threads">
+            <input min={1} max={20} type="number" value={appDraft.scraper_max_threads} onChange={(event) => setAppSetting("scraper_max_threads", Number(event.target.value))} />
+          </Field>
+          <div className="toggle-row">
+            <label><input type="checkbox" checked={appDraft.scraper_headless} onChange={(event) => setAppSetting("scraper_headless", event.target.checked)} />Headless browser</label>
+            <label><input type="checkbox" checked={appDraft.scraper_use_tor} onChange={(event) => setAppSetting("scraper_use_tor", event.target.checked)} />Use Tor</label>
+          </div>
+          <button
+            type="button"
+            disabled={updateAppSettings.isPending}
+            onClick={() => updateAppSettings.mutate({
+              scraper_max_pages: appDraft.scraper_max_pages,
+              scraper_sitemap_limit: appDraft.scraper_sitemap_limit,
+              scraper_headless: appDraft.scraper_headless,
+              scraper_use_tor: appDraft.scraper_use_tor,
+              scraper_max_threads: appDraft.scraper_max_threads,
+            })}
+          >
+            {updateAppSettings.isPending ? <Loader2 className="spin" size={17} /> : <CheckCircle2 size={17} />}
+            Save scraping defaults
+          </button>
+        </div>
+      </section>
+      <section className="panel">
+        <div className="section-head">
+          <div>
+            <h2>Google Places defaults</h2>
+            <p>Radius is saved for compatibility; the current Text Search flow ignores it.</p>
+          </div>
+        </div>
+        <div className="settings-form">
+          <Field label="Business type">
+            <input value={appDraft.places_place_type} onChange={(event) => setAppSetting("places_place_type", event.target.value)} placeholder="lodging" />
+          </Field>
+          <Field label="Max places">
+            <input min={1} max={100} type="number" value={appDraft.places_max_places} onChange={(event) => setAppSetting("places_max_places", Number(event.target.value))} />
+          </Field>
+          <Field label="Radius">
+            <input min={1} max={50000} type="number" value={appDraft.places_radius} onChange={(event) => setAppSetting("places_radius", Number(event.target.value))} />
+          </Field>
+          <Field label="Google API key">
+            <input readOnly value={appSettings.data?.environment.google_api_key_configured ? "Configured" : "Missing in .env"} />
+          </Field>
+          <button
+            type="button"
+            disabled={updateAppSettings.isPending || !appDraft.places_place_type.trim()}
+            onClick={() => updateAppSettings.mutate({
+              places_place_type: appDraft.places_place_type,
+              places_max_places: appDraft.places_max_places,
+              places_radius: appDraft.places_radius,
+            })}
+          >
+            {updateAppSettings.isPending ? <Loader2 className="spin" size={17} /> : <CheckCircle2 size={17} />}
+            Save Places defaults
+          </button>
+        </div>
+      </section>
+      <section className="panel">
+        <div className="section-head">
+          <div>
+            <h2>Environment status</h2>
+            <p>Read-only local configuration resolved from paths and environment variables.</p>
+          </div>
+        </div>
+        <div className="detail-grid">
+          <div><span className="label">OpenAI key</span><strong>{appSettings.data?.environment.openai_api_key_configured ? "Configured" : "Missing"}</strong></div>
+          <div><span className="label">Anthropic key</span><strong>{appSettings.data?.environment.anthropic_api_key_configured ? "Configured" : "Missing"}</strong></div>
+          <div><span className="label">Tor</span><strong>{appSettings.data?.environment.tor_configured ? "Found" : "Missing"}</strong></div>
+          <div><span className="label">ChromeDriver</span><strong>{appSettings.data?.environment.chromedriver_configured ? "Found" : "Manager/default"}</strong></div>
+          <div><span className="label">GeckoDriver</span><strong>{appSettings.data?.environment.geckodriver_configured ? "Found" : "Manager/default"}</strong></div>
+        </div>
+      </section>
+      <ErrorAlert error={updateAppSettings.error} />
       <SettingsBusinessRuleEditor
         businessTypes={(leadFilterOptions.data?.business_types ?? []).map(normalizeCountOption).filter((item): item is { value: string; count: number } => Boolean(item))}
         rules={businessRules.data?.rules ?? []}

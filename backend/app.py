@@ -35,6 +35,7 @@ def index():
     return jsonify({"status": "ok", "message": "n8n scraping backend is running"})
 
 if __name__ == "__main__":
-    setup_logging()
+    with Database() as db:
+        setup_logging(log_level=db.get_app_settings()["settings"]["log_level"])
     print("Running on http://localhost:5000")
     app.run(debug=True, use_reloader=False, host="0.0.0.0", port=5000)

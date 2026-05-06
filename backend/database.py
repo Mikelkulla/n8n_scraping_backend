@@ -41,6 +41,18 @@ DEFAULT_EMAIL_SETTINGS = {
     "ai_email_user_prompt": DEFAULT_EMAIL_USER_PROMPT,
 }
 
+DEFAULT_APP_SETTINGS = {
+    "app_log_level": Config.LOG_LEVEL,
+    "scraper_max_pages": "30",
+    "scraper_sitemap_limit": "10",
+    "scraper_headless": "true",
+    "scraper_use_tor": "false",
+    "scraper_max_threads": str(Config.MAX_THREADS),
+    "places_place_type": "lodging",
+    "places_max_places": "20",
+    "places_radius": "300",
+}
+
 EMAIL_CATEGORY_VALUES = {
     "unknown",
     "booking",
@@ -385,7 +397,7 @@ class Database:
             )
         """)
 
-        for key, value in DEFAULT_EMAIL_SETTINGS.items():
+        for key, value in {**DEFAULT_EMAIL_SETTINGS, **DEFAULT_APP_SETTINGS}.items():
             cursor.execute("""
                 INSERT OR IGNORE INTO app_settings (key, value, updated_at)
                 VALUES (?, ?, CURRENT_TIMESTAMP)
@@ -1582,6 +1594,92 @@ class Database:
                     updated_at = CURRENT_TIMESTAMP
             """, (key, value))
         return self.get_email_settings()
+
+    def get_app_settings(self):
+        """Returns editable operational settings and read-only environment status."""
+        self.cursor.execute("SELECT key, value FROM app_settings")
+        rows = self.cursor.fetchall()
+        values = dict(DEFAULT_APP_SETTINGS)
+        values.update({row["key"]: row["value"] for row in rows})
+
+        return {
+            "settings": {
+                "log_level": values.get("app_log_level") or DEFAULT_APP_SETTINGS["app_log_level"],
+                "scraper_max_pages": self._setting_int(values.get("scraper_max_pages"), 30),
+                "scraper_sitemap_limit": self._setting_int(values.get("scraper_sitemap_limit"), 10),
+                "scraper_headless": self._setting_bool(values.get("scraper_headless"), True),
+                "scraper_use_tor": self._setting_bool(values.get("scraper_use_tor"), False),
+                "scraper_max_threads": self._setting_int(values.get("scraper_max_threads"), Config.MAX_THREADS),
+                "places_place_type": values.get("places_place_type") or "lodging",
+                "places_max_places": self._setting_int(values.get("places_max_places"), 20),
+                "places_radius": self._setting_int(values.get("places_radius"), 300),
+            },
+            "environment": {
+                "google_api_key_configured": bool(Config.GOOGLE_API_KEY),
+                "openai_api_key_configured": bool(Config.OPENAI_API_KEY),
+                "anthropic_api_key_configured": bool(Config.ANTHROPIC_API_KEY),
+                "tor_path": Config.TOR_EXECUTABLE,
+                "tor_configured": bool(Config.TOR_EXECUTABLE and os.path.exists(Config.TOR_EXECUTABLE)),
+                "chromedriver_path": Config.CHROMEDRIVER_PATH,
+                "chromedriver_configured": bool(Config.CHROMEDRIVER_PATH and os.path.exists(Config.CHROMEDRIVER_PATH)),
+                "geckodriver_path": Config.GECKODRIVER_PATH,
+                "geckodriver_configured": bool(Config.GECKODRIVER_PATH and os.path.exists(Config.GECKODRIVER_PATH)),
+                "log_path": Config.LOG_PATH,
+                "temp_path": Config.TEMP_PATH,
+            },
+        }
+
+    def update_app_settings(self, **kwargs):
+        """Updates editable operational settings."""
+        key_map = {
+            "log_level": "app_log_level",
+            "scraper_max_pages": "scraper_max_pages",
+            "scraper_sitemap_limit": "scraper_sitemap_limit",
+            "scraper_headless": "scraper_headless",
+            "scraper_use_tor": "scraper_use_tor",
+            "scraper_max_threads": "scraper_max_threads",
+            "places_place_type": "places_place_type",
+            "places_max_places": "places_max_places",
+            "places_radius": "places_radius",
+        }
+        updates = {
+            setting_key: self._serialize_setting(kwargs[api_key])
+            for api_key, setting_key in key_map.items()
+            if api_key in kwargs and kwargs[api_key] is not None
+        }
+
+        for key, value in updates.items():
+            self.cursor.execute("""
+                INSERT INTO app_settings (key, value, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (key, value))
+        return self.get_app_settings()
+
+    def _setting_int(self, value, fallback):
+        try:
+            parsed = int(value)
+            return parsed if parsed > 0 else fallback
+        except (TypeError, ValueError):
+            return fallback
+
+    def _setting_bool(self, value, fallback):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "1", "yes"}:
+                return True
+            if normalized in {"false", "0", "no"}:
+                return False
+        return fallback
+
+    def _serialize_setting(self, value):
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        return str(value)
 
     def _is_ai_provider_key_configured(self, provider):
         if provider == "openai":

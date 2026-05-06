@@ -60,6 +60,42 @@ def test_email_settings_endpoints_validate_and_update(tmp_path):
         assert response.get_json()["settings"]["model"] == "claude-test"
 
 
+def test_app_settings_endpoint_updates_and_hides_secrets(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    client, db_factory = create_test_client(db_path)
+
+    with patch("backend.routes.api.Database", side_effect=db_factory):
+        response = client.get("/api/app-settings")
+        assert response.status_code == 200
+        payload = response.get_json()
+        assert payload["settings"]["log_level"]
+        assert "OPENAI_API_KEY" not in str(payload)
+        assert "ANTHROPIC_API_KEY" not in str(payload)
+        assert "GOOGLE_API_KEY" not in str(payload)
+
+        response = client.patch("/api/app-settings", json={
+            "log_level": "debug",
+            "scraper_max_pages": 12,
+            "scraper_sitemap_limit": 7,
+            "scraper_headless": False,
+            "scraper_use_tor": True,
+            "scraper_max_threads": 3,
+            "places_place_type": "dentist",
+            "places_max_places": 15,
+            "places_radius": 500,
+        })
+        assert response.status_code == 200
+        settings = response.get_json()["settings"]
+        assert settings["log_level"] == "DEBUG"
+        assert settings["scraper_max_pages"] == 12
+        assert settings["scraper_headless"] is False
+        assert settings["scraper_use_tor"] is True
+        assert settings["places_place_type"] == "dentist"
+
+        response = client.patch("/api/app-settings", json={"scraper_max_pages": 0})
+        assert response.status_code == 400
+
+
 def test_business_type_rule_endpoint_upserts(tmp_path):
     db_path = str(tmp_path / "test.db")
     client, db_factory = create_test_client(db_path)
@@ -151,6 +187,26 @@ def test_generate_email_reports_missing_api_key(tmp_path):
 
     assert response.status_code == 502
     assert "OPENAI_API_KEY" in response.get_json()["error"]
+
+
+def test_openai_gpt5_payload_omits_temperature():
+    from backend.ai_email_service import _generate_openai
+
+    class FakeResponse:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"choices": [{"message": {"content": "Draft"}}]}
+
+    with patch("backend.ai_email_service.Config.OPENAI_API_KEY", "key"):
+        with patch("backend.ai_email_service.requests.post", return_value=FakeResponse()) as post:
+            assert _generate_openai("gpt-5.1", "System", "User") == "Draft"
+            assert "temperature" not in post.call_args.kwargs["json"]
+
+        with patch("backend.ai_email_service.requests.post", return_value=FakeResponse()) as post:
+            assert _generate_openai("gpt-4.1-mini", "System", "User") == "Draft"
+            assert post.call_args.kwargs["json"]["temperature"] == 0.5
 
 
 def test_email_category_rule_routes_apply_unknowns(tmp_path):

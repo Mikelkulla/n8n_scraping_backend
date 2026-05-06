@@ -14,7 +14,7 @@ from backend.ai_email_service import (
     validate_generation_target,
 )
 import logging
-from config.logging import log_function_call
+from config.logging import apply_log_level, log_function_call
 from config.utils import validate_emails, validate_url
 
 api_bp = Blueprint("api", __name__)
@@ -22,12 +22,14 @@ api_bp = Blueprint("api", __name__)
 # Dictionary to track active scraping threads
 active_jobs = {}
 BULK_EMAIL_GENERATION_EXTRA_BLOCKED_STAGES = {"approved"}
+APP_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 
 def _scrape_and_store_lead_enrichment(
     lead,
     max_pages,
     use_tor,
     headless,
+    max_threads=None,
     stop_job_id=None,
     stop_step_id=None,
 ):
@@ -73,6 +75,7 @@ def _scrape_and_store_lead_enrichment(
         use_tor=use_tor,
         headless=headless,
         sitemap_limit=10,
+        max_threads=max_threads or 5,
         stop_job_id=stop_job_id,
         stop_step_id=stop_step_id,
     )
@@ -153,6 +156,8 @@ def start_scrape():
         use_tor = data.get("use_tor")
         headless = data.get("headless")
         sitemap_limit = data.get("sitemap_limit", 10)
+        with Database() as db:
+            max_threads = db.get_app_settings()["settings"]["scraper_max_threads"]
 
         # Initialize progress in the database
         write_progress(job_id, step_id, input=url, status="running", use_tor=use_tor, headless=headless)
@@ -167,7 +172,8 @@ def start_scrape():
             max_pages=max_pages,
             use_tor=use_tor,
             headless=headless,
-            sitemap_limit=sitemap_limit
+            sitemap_limit=sitemap_limit,
+            max_threads=max_threads,
         )
 
         logging.info(f"Scrape job {job_id} completed. Found {len(emails)} emails.")
@@ -450,6 +456,7 @@ def scrape_leads_emails():
 
         # Fetch unscraped leads before spawning the thread
         with Database() as db:
+            max_threads = db.get_app_settings()["settings"]["scraper_max_threads"]
             leads = db.get_leads(status_filter="NOT scraped")
 
         if not leads:
@@ -481,6 +488,7 @@ def scrape_leads_emails():
                             max_pages,
                             use_tor,
                             headless,
+                            max_threads=max_threads,
                             stop_job_id=job_id,
                             stop_step_id=step_id,
                         )
@@ -630,6 +638,55 @@ def _validate_email_settings_payload(data):
     return update_data
 
 
+def _parse_positive_int_setting(data, key, minimum=1, maximum=None):
+    if key not in data:
+        return None
+    try:
+        value = int(data[key])
+    except (TypeError, ValueError):
+        raise ValueError(f"{key} must be a positive integer")
+    if value < minimum:
+        raise ValueError(f"{key} must be at least {minimum}")
+    if maximum is not None and value > maximum:
+        raise ValueError(f"{key} must be at most {maximum}")
+    return value
+
+
+def _validate_app_settings_payload(data):
+    update_data = {}
+
+    if "log_level" in data:
+        log_level = str(data["log_level"]).strip().upper()
+        if log_level not in APP_LOG_LEVELS:
+            raise ValueError("log_level must be DEBUG, INFO, WARNING, ERROR, or CRITICAL")
+        update_data["log_level"] = log_level
+
+    for key, maximum in {
+        "scraper_max_pages": 100,
+        "scraper_sitemap_limit": 50,
+        "scraper_max_threads": 20,
+        "places_max_places": 100,
+        "places_radius": 50000,
+    }.items():
+        value = _parse_positive_int_setting(data, key, maximum=maximum)
+        if value is not None:
+            update_data[key] = value
+
+    for key in ["scraper_headless", "scraper_use_tor"]:
+        if key in data:
+            update_data[key] = _parse_optional_bool(data[key])
+
+    if "places_place_type" in data:
+        place_type = str(data["places_place_type"]).strip()
+        if not place_type:
+            raise ValueError("places_place_type cannot be empty")
+        update_data["places_place_type"] = place_type
+
+    if not update_data:
+        raise ValueError("Provide at least one editable app setting")
+    return update_data
+
+
 def _validate_business_rule_payload(data):
     return {
         "business_description": str(data.get("business_description") or "").strip(),
@@ -649,6 +706,37 @@ def get_email_settings():
         return jsonify({"settings": settings}), 200
     except Exception as e:
         logging.error(f"Error fetching email settings: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/app-settings", methods=["GET"])
+@log_function_call
+def get_app_settings():
+    """Returns editable operational settings plus read-only environment status."""
+    try:
+        with Database() as db:
+            return jsonify(db.get_app_settings()), 200
+    except Exception as e:
+        logging.error(f"Error fetching app settings: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/app-settings", methods=["PATCH"])
+@log_function_call
+def patch_app_settings():
+    """Updates editable operational settings."""
+    try:
+        data = request.get_json() or {}
+        update_data = _validate_app_settings_payload(data)
+        with Database() as db:
+            payload = db.update_app_settings(**update_data)
+        if "log_level" in update_data:
+            apply_log_level(update_data["log_level"])
+        return jsonify(payload), 200
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logging.error(f"Error updating app settings: {e}")
         return jsonify({"error": str(e)}), 500
 
 

@@ -1,8 +1,10 @@
 import { apiRequest } from "./httpClient";
 import type {
+  AppSettingsResponse,
   BusinessTypeEmailRuleResponse,
   BusinessTypeEmailRulesResponse,
   EmailSettingsResponse,
+  UpdateAppSettingsRequest,
   UpdateBusinessTypeEmailRuleRequest,
   UpdateEmailSettingsRequest,
 } from "./types";
@@ -13,6 +15,17 @@ export function getEmailSettings() {
 
 export function updateEmailSettings(payload: UpdateEmailSettingsRequest) {
   return apiRequest<EmailSettingsResponse>("/email-settings", {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getAppSettings() {
+  return apiRequest<AppSettingsResponse>("/app-settings");
+}
+
+export function updateAppSettings(payload: UpdateAppSettingsRequest) {
+  return apiRequest<AppSettingsResponse>("/app-settings", {
     method: "PATCH",
     body: JSON.stringify(payload),
   });

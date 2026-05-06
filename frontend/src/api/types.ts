@@ -395,6 +395,39 @@ export type UpdateEmailSettingsRequest = {
   user_prompt?: string;
 };
 
+export type AppSettings = {
+  log_level: "DEBUG" | "INFO" | "WARNING" | "ERROR" | "CRITICAL" | string;
+  scraper_max_pages: number;
+  scraper_sitemap_limit: number;
+  scraper_headless: boolean;
+  scraper_use_tor: boolean;
+  scraper_max_threads: number;
+  places_place_type: string;
+  places_max_places: number;
+  places_radius: number;
+};
+
+export type AppSettingsEnvironment = {
+  google_api_key_configured: boolean;
+  openai_api_key_configured: boolean;
+  anthropic_api_key_configured: boolean;
+  tor_path?: string | null;
+  tor_configured: boolean;
+  chromedriver_path?: string | null;
+  chromedriver_configured: boolean;
+  geckodriver_path?: string | null;
+  geckodriver_configured: boolean;
+  log_path: string;
+  temp_path: string;
+};
+
+export type AppSettingsResponse = {
+  settings: AppSettings;
+  environment: AppSettingsEnvironment;
+};
+
+export type UpdateAppSettingsRequest = Partial<AppSettings>;
+
 export type BusinessTypeEmailRule = {
   business_type: string;
   business_description?: string | null;

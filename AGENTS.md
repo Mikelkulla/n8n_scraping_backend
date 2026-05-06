@@ -257,6 +257,11 @@ Current AI email keys:
 - `ai_email_system_prompt`: system prompt used for campaign email drafting.
 - `ai_email_user_prompt`: user prompt/template used as part of the structured generation request.
 
+Current operational settings keys:
+- `app_log_level`: persisted logging verbosity, one of `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`.
+- `scraper_max_pages`, `scraper_sitemap_limit`, `scraper_headless`, `scraper_use_tor`, `scraper_max_threads`: defaults for website/email scraping forms and runtime scraper concurrency.
+- `places_place_type`, `places_max_places`, `places_radius`: defaults for Google Places discovery forms. `places_radius` is retained for compatibility, but the current Text Search flow ignores radius.
+
 API keys are not stored in SQLite and are never returned to the frontend. They are read from environment variables.
 
 ### `business_type_email_rules`
@@ -334,6 +339,8 @@ All API endpoints are mounted under `/api`, except Flask root health check `/`.
 | `GET` | `/api/campaigns/<campaign_id>/export` | Export campaign leads | Default CSV; `?format=json`; optional `stage` filter |
 | `GET` | `/api/email-settings` | Read AI email drafting settings | Includes `api_key_configured`, never returns API keys |
 | `PATCH` | `/api/email-settings` | Update AI email drafting settings | Editable: `provider`, `model`, `system_prompt`, `user_prompt` |
+| `GET` | `/api/app-settings` | Read operational app settings and environment status | Includes log/scraper/Places defaults and read-only configured/missing status for API keys, drivers, Tor, log/temp paths |
+| `PATCH` | `/api/app-settings` | Update operational app settings | Editable: logging verbosity, scraper defaults, scraper max threads, Google Places defaults; never accepts secrets |
 | `GET` | `/api/email-settings/business-types` | List business-type email personalization rules | Used by Settings and campaign detail context |
 | `PUT` | `/api/email-settings/business-types/<business_type>` | Create/update one business-type email rule | Stores description, pain point, offer angle, extra instructions |
 | `GET` | `/api/email-category-rules` | List email category auto-marking rules | Returns available categories and rules |
@@ -405,6 +412,7 @@ Business logic:
 - Stores leads in SQLite.
 - Normalizes websites with `extract_base_url()`.
 - Current route is synchronous.
+- If request fields are omitted, the frontend uses saved `/api/app-settings` Places defaults before submission.
 
 ### `POST /api/scrape/leads-emails`
 
@@ -442,6 +450,7 @@ Business logic:
 - Starts background thread.
 - Validates each website.
 - Scrapes emails and updates lead `emails` and `status`.
+- Uses saved `scraper_max_threads` from `/api/app-settings` for the bounded worker pool.
 - Captures cleaned visible public homepage text into `website_summary` when useful homepage text is found.
 - Summary capture is intentionally simple: it uses the lead website homepage only and does not try about/service/contact fallback pages.
 - One-off `/api/scrape/website-emails` remains email-only and does not capture/store website summary context.
@@ -599,7 +608,7 @@ Pages in `frontend/src/App.tsx`:
 | Campaigns | Create campaigns from lead filters, review campaign leads, generate AI drafts, update stages/priority/notes/final email, export campaign CSV | `/api/campaigns`, `/api/campaigns/<campaign_id>`, `/api/campaigns/<campaign_id>/leads`, `/api/campaign-leads/<campaign_lead_id>`, `/api/campaign-leads/<campaign_lead_id>/generate-email`, `/api/campaigns/<campaign_id>/generate-emails`, `/api/campaigns/<campaign_id>/export` |
 | Jobs | List/filter job history, select job details, stop running jobs | `/api/jobs`, `/api/progress/<job_id>`, `/api/stop/<job_id>` |
 | Email Rules | Review unknown email local-parts, create exact local-part category rules, and reapply rules to unknown emails | `/api/email-category-rules`, `/api/lead-emails/unknown` |
-| Settings | Configure AI email drafting provider/model/prompts and business-type personalization rules | `/api/email-settings`, `/api/email-settings/business-types`, `/api/leads/filter-options` |
+| Settings | Configure AI drafting, operational defaults, logging verbosity, scraper defaults, Google Places defaults, environment status, and business-type personalization rules | `/api/email-settings`, `/api/app-settings`, `/api/email-settings/business-types`, `/api/leads/filter-options` |
 
 Frontend API clients:
 - `frontend/src/api/httpClient.ts`: fetch wrapper, base URLs, `ApiError`, download helper.
@@ -608,7 +617,7 @@ Frontend API clients:
 - `frontend/src/api/jobsApi.ts`: job list, progress, stop.
 - `frontend/src/api/leadsApi.ts`: lead list, patch, export.
 - `frontend/src/api/summaryApi.ts`: dashboard summary.
-- `frontend/src/api/emailSettingsApi.ts`: AI email settings and business-type personalization rules.
+- `frontend/src/api/emailSettingsApi.ts`: AI email settings, operational app settings, and business-type personalization rules.
 - `frontend/src/api/emailRulesApi.ts`: email category rule management and unknown local-part review.
 - `frontend/src/api/types.ts`: shared TypeScript response/request types.
 
@@ -625,6 +634,8 @@ Frontend hooks:
 - `useExportLeadsJson()`
 - `useSummary()`
 - `useEmailSettings()`
+- `useAppSettings()`
+- `useUpdateAppSettings()`
 - `useBusinessTypeEmailRules()`
 - `useGenerateCampaignLeadEmail()`
 - `useGenerateCampaignEmails()`
@@ -797,8 +808,9 @@ Current behavior:
 AI email drafting is part of the Campaigns workflow, not an automatic sending system.
 
 Current behavior:
-- Settings tab manages provider (`openai` or `anthropic`), model, system prompt, user prompt/template, and per-business-type personalization rules.
+- Settings tab manages provider (`openai` or `anthropic`), provider-aware curated model dropdowns with a custom model ID fallback, system prompt, user prompt/template, operational defaults, logging verbosity, and per-business-type personalization rules.
 - Provider API keys are read server-side from `.env` as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`. The frontend only receives `api_key_configured`.
+- Operational Settings also shows read-only environment status for Google/OpenAI/Anthropic API keys, Tor/driver availability, log path, and temp path. Secrets and local binary paths are not editable from the UI.
 - A single campaign lead draft can be generated from the expanded campaign lead row.
 - Visible/filtered campaign leads can be batch-generated from the campaign detail toolbar.
 - Generation uses campaign lead context: lead name, business type, location, address, phone, website, usable email, website summary, campaign notes, existing draft/final email, and the matching business-type email rule.

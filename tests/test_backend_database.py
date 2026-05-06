@@ -620,6 +620,27 @@ class TestDatabase:
             assert rule["pain_point"] == "manual patient intake"
             assert conn.list_business_type_email_rules()[0]["business_type"] == "dentist"
 
+    def test_app_settings_persist(self, temp_db):
+        """Test operational app settings defaults and updates."""
+        db, _ = temp_db
+        with db as conn:
+            payload = conn.get_app_settings()
+            assert payload["settings"]["log_level"]
+            assert payload["settings"]["scraper_max_pages"] > 0
+            assert "environment" in payload
+
+            updated = conn.update_app_settings(
+                log_level="WARNING",
+                scraper_max_pages=14,
+                scraper_headless=False,
+                places_place_type="dentist",
+                places_max_places=25,
+            )
+            assert updated["settings"]["log_level"] == "WARNING"
+            assert updated["settings"]["scraper_max_pages"] == 14
+            assert updated["settings"]["scraper_headless"] is False
+            assert updated["settings"]["places_place_type"] == "dentist"
+
     def test_store_generated_email_draft_does_not_overwrite_final_email(self, temp_db):
         """Test generated drafts update draft/stage while preserving final email."""
         db, _ = temp_db

@@ -6,6 +6,25 @@ from backend.app_settings import Config
 import functools
 import json
 
+LOG_LEVEL_MAP = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+    "CRITICAL": logging.CRITICAL,
+}
+
+
+def apply_log_level(log_level):
+    """Applies a logging level to the root logger and existing handlers."""
+    normalized = str(log_level or "INFO").strip().upper()
+    numeric_log_level = LOG_LEVEL_MAP.get(normalized, logging.INFO)
+    root_logger = logging.getLogger("")
+    root_logger.setLevel(numeric_log_level)
+    for handler in root_logger.handlers:
+        handler.setLevel(numeric_log_level)
+    return normalized if normalized in LOG_LEVEL_MAP else "INFO"
+
 def log_function_call(func):
     """A decorator to log function calls, arguments, and return values.
 
@@ -174,14 +193,7 @@ def setup_logging(log_dir=Config.LOG_PATH, log_prefix=Config.LOG_PREFIX, max_byt
     log_file = os.path.join(log_dir, f"{log_prefix}_{date_str}.log")
 
     # Map log level string to logging constants
-    log_level_map = {
-        "DEBUG": logging.DEBUG,
-        "INFO": logging.INFO,
-        "WARNING": logging.WARNING,
-        "ERROR": logging.ERROR,
-        "CRITICAL": logging.CRITICAL,
-    }
-    numeric_log_level = log_level_map.get(log_level.upper(), logging.INFO)
+    numeric_log_level = LOG_LEVEL_MAP.get(log_level.upper(), logging.INFO)
 
     try:
         # Create log directory if it doesn't exist
@@ -203,7 +215,7 @@ def setup_logging(log_dir=Config.LOG_PATH, log_prefix=Config.LOG_PREFIX, max_byt
 
         # Set log levels for specific libraries
         for lib, level_str in Config.LIBRARY_LOG_LEVELS.items():
-            lib_level = log_level_map.get(level_str.upper(), logging.WARNING)
+            lib_level = LOG_LEVEL_MAP.get(level_str.upper(), logging.WARNING)
             logging.getLogger(lib).setLevel(lib_level)
 
         logging.info(f"Logging initialized to {log_file} with level {log_level} and max size {max_bytes} bytes")
@@ -224,7 +236,7 @@ def setup_logging(log_dir=Config.LOG_PATH, log_prefix=Config.LOG_PREFIX, max_byt
 
         # Set log levels for specific libraries in fallback mode
         for lib, level_str in Config.LIBRARY_LOG_LEVELS.items():
-            lib_level = log_level_map.get(level_str.upper(), logging.WARNING)
+            lib_level = LOG_LEVEL_MAP.get(level_str.upper(), logging.WARNING)
             logging.getLogger(lib).setLevel(lib_level)
 
         logging.error(f"Failed to save log to {log_file}: {e}")

@@ -114,20 +114,23 @@ def _generate_openai(model, system_prompt, user_content):
     if not Config.OPENAI_API_KEY:
         raise EmailGenerationError("OPENAI_API_KEY is not configured")
 
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ],
+    }
+    if _supports_openai_chat_temperature(model):
+        payload["temperature"] = 0.5
+
     response = requests.post(
         "https://api.openai.com/v1/chat/completions",
         headers={
             "Authorization": f"Bearer {Config.OPENAI_API_KEY}",
             "Content-Type": "application/json",
         },
-        json={
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ],
-            "temperature": 0.5,
-        },
+        json=payload,
         timeout=45,
     )
     if response.status_code >= 400:
@@ -140,6 +143,11 @@ def _generate_openai(model, system_prompt, user_content):
     except (KeyError, IndexError, TypeError) as exc:
         raise EmailGenerationError("OpenAI response did not include email content") from exc
     return _clean(content)
+
+
+def _supports_openai_chat_temperature(model):
+    """GPT-5-family Chat Completions requests reject temperature in most modes."""
+    return not _clean(model).lower().startswith("gpt-5")
 
 
 def _generate_anthropic(model, system_prompt, user_content):
