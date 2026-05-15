@@ -8,7 +8,33 @@ from backend.database import Database
 import logging
 
 from config.job_functions import write_progress
+from config.logging import format_debug_payload, sanitize_for_logging
 from config.utils import extract_base_url
+
+
+def _log_places_request(method, url, **details):
+    logging.info("%s %s", method, url)
+    logging.debug(
+        "Places request %s",
+        format_debug_payload({"method": method, "url": url, **sanitize_for_logging(details)}),
+    )
+
+
+def _log_places_response(response):
+    logging.debug(
+        "Places response %s",
+        format_debug_payload({
+            "status_code": response.status_code,
+            "body": _safe_response_json(response),
+        }),
+    )
+
+
+def _safe_response_json(response):
+    try:
+        return response.json()
+    except ValueError:
+        return response.text[:500]
 
 def location_to_latlng(location):
     """Converts a location name to its geographical coordinates.
@@ -27,7 +53,7 @@ def location_to_latlng(location):
         geolocator = Nominatim(user_agent="geoapi")
         loc = geolocator.geocode(location)
         if loc:
-            logging.info(f"Geocoded {location} to {loc.latitude},{loc.longitude}")
+            logging.debug(f"Geocoded {location} to {loc.latitude},{loc.longitude}")
             return f"{loc.latitude},{loc.longitude}"
         else:
             logging.warning(f"Location not found: {location}")
@@ -91,10 +117,12 @@ def call_google_places_api_near_search(job_id, step_id, location, radius=300, pl
                 "type": place_type,
                 "key": api_key
             }
+            _log_places_request("GET", url, params=params)
             response = requests.get(url, params=params)
+            _log_places_response(response)
             response.raise_for_status()
             places = response.json().get("results", [])
-            logging.info(f"Found {len(places)} places for location {location}")
+            logging.debug(f"Found {len(places)} places for location {location}")
 
             results = []
             count = 0
@@ -113,8 +141,9 @@ def call_google_places_api_near_search(job_id, step_id, location, radius=300, pl
                     "fields": "name,formatted_address,international_phone_number,website",
                     "key": api_key
                 }
+                _log_places_request("GET", details_url, params=details_params)
                 details_response = requests.get(details_url, params=details_params)
-                logging.info(f"Places Response: {details_response}")
+                _log_places_response(details_response)
                 time.sleep(0.1)  # Respect API rate limits
                 details_response.raise_for_status()
                 details_data = details_response.json()
@@ -134,7 +163,7 @@ def call_google_places_api_near_search(job_id, step_id, location, radius=300, pl
                     "phone": details.get("international_phone_number"),
                     "website": details.get("website")
                 }
-                logging.info(f"Lead Data: {lead_data}")
+                logging.debug(f"Lead Data: {lead_data}")
                 results.append(lead_data)
 
                 stored_lead = db.upsert_google_places_lead(
@@ -148,7 +177,7 @@ def call_google_places_api_near_search(job_id, step_id, location, radius=300, pl
                 )
                 lead_data["lead_id"] = stored_lead.get("lead_id") if stored_lead else None
                 lead_data["storage_status"] = stored_lead.get("storage_status") if stored_lead else None
-                logging.info(
+                logging.debug(
                     f"{lead_data['storage_status'] or 'stored'} canonical lead for place "
                     f"{lead_data['name']} (place_id: {place_id}, execution_id: {execution_id})"
                 )
@@ -230,12 +259,13 @@ def call_google_places_api(job_id, step_id, location, radius=300, place_type="lo
                 if next_page_token:
                     body["pageToken"] = next_page_token
 
+                _log_places_request("POST", url, headers=headers, json=body)
                 response = requests.post(url, json=body, headers=headers)
-                logging.info(f"Text Search Response: {response.status_code}")
+                _log_places_response(response)
                 response.raise_for_status()
                 data = response.json()
                 places = data.get("places", [])
-                logging.info(f"Found {len(places)} places for query: {text_query}")
+                logging.debug(f"Found {len(places)} places for query: {text_query}")
                 total_rows += len(places)
                 for place in places:
                     if count >= max_places:
@@ -256,7 +286,7 @@ def call_google_places_api(job_id, step_id, location, radius=300, place_type="lo
                         "phone": place.get("internationalPhoneNumber"),
                         "website": website
                     }
-                    logging.info(f"Lead Data: {lead_data}")
+                    logging.debug(f"Lead Data: {lead_data}")
                     results.append(lead_data)
 
                     stored_lead = db.upsert_google_places_lead(
@@ -270,7 +300,7 @@ def call_google_places_api(job_id, step_id, location, radius=300, place_type="lo
                     )
                     lead_data["lead_id"] = stored_lead.get("lead_id") if stored_lead else None
                     lead_data["storage_status"] = stored_lead.get("storage_status") if stored_lead else None
-                    logging.info(
+                    logging.debug(
                         f"{lead_data['storage_status'] or 'stored'} canonical lead for place "
                         f"{lead_data['name']} (place_id: {place_id}, execution_id: {execution_id})"
                     )
@@ -278,12 +308,12 @@ def call_google_places_api(job_id, step_id, location, radius=300, place_type="lo
                     count += 1
 
                 next_page_token = data.get("nextPageToken")
-                logging.info(f"PageToken: {next_page_token}")
+                logging.debug(f"PageToken: {next_page_token}")
                 if not next_page_token or count >= max_places:
                     if not next_page_token:
-                        logging.info(f"There is no next page token!")
+                        logging.debug("There is no next page token!")
                     if count >= max_places:
-                        logging.info(f"count >= max_places")
+                        logging.debug("count >= max_places")
                     break
                 time.sleep(2)  # Wait for nextPageToken to become valid
 

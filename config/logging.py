@@ -14,6 +14,161 @@ LOG_LEVEL_MAP = {
     "CRITICAL": logging.CRITICAL,
 }
 
+TAG_PATH_MAP = (
+    ("backend/routes/", "api"),
+    ("backend\\routes\\", "api"),
+    ("backend/scripts/google_api/", "places"),
+    ("backend\\scripts\\google_api\\", "places"),
+    ("backend/ai_email_service.py", "LLM"),
+    ("backend\\ai_email_service.py", "LLM"),
+    ("backend/database.py", "database"),
+    ("backend\\database.py", "database"),
+    ("backend/scripts/scraping/", "enrichment"),
+    ("backend\\scripts\\scraping\\", "enrichment"),
+    ("backend/scripts/selenium/", "selenium"),
+    ("backend\\scripts\\selenium\\", "selenium"),
+    ("config/job_functions.py", "jobs"),
+    ("config\\job_functions.py", "jobs"),
+)
+
+TAG_LOGGER_MAP = (
+    ("werkzeug", "api"),
+    ("flask", "api"),
+    ("backend.routes", "api"),
+    ("backend.scripts.google_api", "places"),
+    ("backend.ai_email_service", "LLM"),
+    ("backend.database", "database"),
+    ("backend.scripts.scraping", "enrichment"),
+    ("backend.scripts.selenium", "selenium"),
+    ("config.job_functions", "jobs"),
+)
+
+SENSITIVE_KEYS = {"authorization", "x-goog-api-key", "key", "api_key", "token", "secret", "password"}
+VERBOSE_PAYLOAD_KEYS = {
+    "body",
+    "campaign_lead",
+    "content",
+    "email_draft",
+    "emails",
+    "final_email",
+    "lead",
+    "leads",
+    "system_prompt",
+    "user_prompt",
+    "website_summary",
+}
+MAX_LOG_VALUE_LENGTH = 2000
+
+
+def _truncate_log_value(value, max_length=MAX_LOG_VALUE_LENGTH):
+    text = str(value)
+    if len(text) <= max_length:
+        return text
+    return f"{text[:max_length]}...<truncated {len(text) - max_length} chars>"
+
+
+def sanitize_for_logging(value, redact_keys=None, max_length=MAX_LOG_VALUE_LENGTH):
+    """Returns a JSON-serializable, redacted copy of a value for DEBUG logs."""
+    redact_keys = {str(key).lower() for key in (redact_keys or set())} | SENSITIVE_KEYS
+    if isinstance(value, dict):
+        sanitized = {}
+        for key, item in value.items():
+            key_text = str(key)
+            if key_text.lower() in redact_keys:
+                sanitized[key] = "<redacted>"
+            elif key_text.lower() in VERBOSE_PAYLOAD_KEYS:
+                sanitized[key] = "<omitted>"
+            else:
+                sanitized[key] = sanitize_for_logging(item, redact_keys=redact_keys, max_length=max_length)
+        return sanitized
+    if isinstance(value, (list, tuple, set)):
+        return [sanitize_for_logging(item, redact_keys=redact_keys, max_length=max_length) for item in value]
+    if isinstance(value, str):
+        return _truncate_log_value(value, max_length=max_length)
+    return value
+
+
+def format_debug_payload(value):
+    """Formats a sanitized payload for a one-line debug log entry."""
+    try:
+        return json.dumps(sanitize_for_logging(value), ensure_ascii=False, default=str)
+    except TypeError:
+        return _truncate_log_value(value)
+
+
+def tag_for_logger_name(logger_name):
+    """Returns the configured source tag for a logger/module name."""
+    for prefix, tag in TAG_LOGGER_MAP:
+        if logger_name == prefix or logger_name.startswith(f"{prefix}."):
+            return tag
+    return "app"
+
+
+class LogTagFilter(logging.Filter):
+    """Adds a log_tag attribute to records based on explicit extra data or source."""
+
+    def filter(self, record):
+        if getattr(record, "log_tag", None):
+            return True
+
+        logger_name = getattr(record, "name", "")
+        tag = tag_for_logger_name(logger_name)
+        if tag != "app":
+            record.log_tag = tag
+            return True
+
+        pathname = os.path.normpath(getattr(record, "pathname", "")).replace(os.sep, "/")
+        for path_fragment, tag in TAG_PATH_MAP:
+            normalized_fragment = path_fragment.replace("\\", "/")
+            if normalized_fragment in pathname:
+                record.log_tag = tag
+                return True
+
+        record.log_tag = "app"
+        return True
+
+
+class TaggedFormatter(logging.Formatter):
+    """Uses compact INFO logs and filename-rich non-INFO logs."""
+
+    INFO_FORMAT = "%(asctime)s - %(levelname)s - [%(log_tag)s] - %(message)s"
+    DETAIL_FORMAT = "%(asctime)s - %(levelname)s - [%(log_tag)s] - %(filename)s - %(message)s"
+
+    def __init__(self):
+        super().__init__()
+        self.info_formatter = logging.Formatter(self.INFO_FORMAT)
+        self.detail_formatter = logging.Formatter(self.DETAIL_FORMAT)
+
+    def format(self, record):
+        if not getattr(record, "log_tag", None):
+            LogTagFilter().filter(record)
+        formatter = self.info_formatter if record.levelno == logging.INFO else self.detail_formatter
+        return formatter.format(record)
+
+
+class TagOnlyFilter(LogTagFilter):
+    """Allows only records for selected log tags."""
+
+    def __init__(self, tags):
+        super().__init__()
+        self.tags = set(tags)
+
+    def filter(self, record):
+        super().filter(record)
+        return record.log_tag in self.tags
+
+
+class MinimumLevelFilter(LogTagFilter):
+    """Allows records at or above one level from all tags."""
+
+    def __init__(self, minimum_level):
+        super().__init__()
+        self.minimum_level = minimum_level
+
+    def filter(self, record):
+        super().filter(record)
+        return record.levelno >= self.minimum_level
+
 
 def apply_log_level(log_level):
     """Applies a logging level to the root logger and existing handlers."""
@@ -24,6 +179,65 @@ def apply_log_level(log_level):
     for handler in root_logger.handlers:
         handler.setLevel(numeric_log_level)
     return normalized if normalized in LOG_LEVEL_MAP else "INFO"
+
+
+def _get_request_log_context():
+    try:
+        from flask import has_request_context, request
+    except ImportError:
+        return None
+    if not has_request_context():
+        return None
+    body = request.get_json(silent=True)
+    if body is None:
+        body = request.get_data(as_text=True) if request.get_data() else None
+    return {
+        "method": request.method,
+        "path": request.path,
+        "query": request.args.to_dict(flat=False),
+        "body": body,
+    }
+
+
+def _response_to_log_payload(result):
+    status = getattr(result, "status_code", None)
+    resp_obj = result
+    if isinstance(result, tuple) and result and hasattr(result[0], "status_code"):
+        resp_obj = result[0]
+        status = result[1] if len(result) > 1 else getattr(resp_obj, "status_code", None)
+    if not hasattr(resp_obj, "status_code"):
+        return None
+
+    body = resp_obj.get_data(as_text=True) if hasattr(resp_obj, "get_data") else str(resp_obj)
+    try:
+        body = json.loads(body)
+    except Exception:
+        pass
+    return {
+        "status": status,
+        "headers": dict(getattr(resp_obj, "headers", {})),
+        "body": _summarize_response_body(body),
+    }
+
+
+def _summarize_response_body(body):
+    if isinstance(body, dict):
+        summary = {}
+        for key, value in body.items():
+            if str(key).lower() in VERBOSE_PAYLOAD_KEYS:
+                summary[key] = "<omitted>"
+            elif isinstance(value, list):
+                summary[key] = f"<list length={len(value)}>"
+            elif isinstance(value, dict):
+                summary[key] = f"<dict keys={len(value)}>"
+            else:
+                summary[key] = value
+        return summary
+    if isinstance(body, list):
+        return f"<list length={len(body)}>"
+    if body:
+        return _truncate_log_value(body, max_length=500)
+    return body
 
 def log_function_call(func):
     """A decorator to log function calls, arguments, and return values.
@@ -40,14 +254,31 @@ def log_function_call(func):
     """
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
+        request_context = _get_request_log_context()
+        log_extra = {"log_tag": tag_for_logger_name(func.__module__)}
+        is_route_handler = bool(request_context and func.__module__.startswith("backend.routes."))
+
+        if is_route_handler:
+            logging.info(
+                "%s %s",
+                request_context["method"],
+                request_context["path"],
+                extra=log_extra,
+            )
+            logging.debug(
+                "API request %s",
+                format_debug_payload(request_context),
+                extra=log_extra,
+            )
+
         # Log function entry with arguments
         # Exclude 'self' from args to avoid redundant logging
         args_repr = [
-            repr(a) for a in args
+            "<arg>" for a in args
             if not (hasattr(a, "__class__")
                     and a.__class__.__name__ == func.__qualname__.split(".")[0])
         ]
-        kwargs_repr = [f"{k}={v!r}" for k, v in kwargs.items()]
+        kwargs_repr = [f"{k}=<omitted>" for k in kwargs]
         signature = ", ".join(args_repr + kwargs_repr)
 
         # Check if the function is a method of a class
@@ -56,62 +287,31 @@ def log_function_call(func):
             log_message = f"Calling {class_name}.{method_name}({signature})"
         else:
             log_message = f"Calling {func.__name__}({signature})"
-        logging.debug(log_message)
+        logging.debug(log_message, extra=log_extra)
 
         # Execute the function
         try:
             result = func(*args, **kwargs)
 
-            # --- Handle Flask/FastAPI responses ---
-            if hasattr(result, "status_code"):
-                headers = dict(getattr(result, "headers", {}))
-                body = result.get_data(as_text=True) if hasattr(result, "get_data") else str(result)
-
-                # Try to pretty-print JSON body if possible
-                try:
-                    body = json.dumps(json.loads(body), indent=2, ensure_ascii=False)
-                except Exception:
-                    pass  # fallback: raw body string
-
-                headers_str = "\n".join(f"{k}: {v}" for k, v in headers.items())
-                log_text = {
-                    "function_name": f"{func.__qualname__} returned:\n",
-                    "status": f"\nRESPONSE STATUS {result.status_code}\n",
-                    "headers": f"RESPONSE HEADERS\n{headers_str}\n",
-                    "body" :f"\nRESPONSE BODY\n{body}"
-                }
-                logging.debug(f"{log_text.get('function_name')}")
-                logging.info(f"{log_text.get('status')}{log_text.get('headers')}")
-                logging.debug(f"{log_text.get('body')}")
-            elif isinstance(result, tuple) and hasattr(result[0], "status_code"):
-                resp_obj, status = result
-                headers = dict(getattr(resp_obj, "headers", {}))
-                body = resp_obj.get_data(as_text=True)
-
-                try:
-                    body = json.dumps(json.loads(body), indent=2, ensure_ascii=False)
-                except Exception:
-                    pass
-
-                headers_str = "\n".join(f"{k}: {v}" for k, v in headers.items())
-                log_text = {
-                    "function_name": f"{func.__qualname__} returned:\n",
-                    "status": f"\nRESPONSE STATUS {status}\n",
-                    "headers": f"RESPONSE HEADERS\n{headers_str}\n",
-                    "body": f"\nRESPONSE BODY\n{body}"
-                }
-                logging.debug(f"{log_text.get('function_name')}")
-                logging.info(f"{log_text.get('status')}{log_text.get('headers')}")
-                logging.debug(f"{log_text.get('body')}")
-
+            response_payload = _response_to_log_payload(result)
+            if response_payload and is_route_handler:
+                logging.debug(
+                    "API response %s",
+                    format_debug_payload(response_payload),
+                    extra=log_extra,
+                )
             else:
                 # Normal function
-                logging.debug(f"{func.__qualname__} returned {result!r}")
+                logging.debug(f"{func.__qualname__} returned", extra=log_extra)
 
             return result
 
         except Exception as e:
-            logging.error(f"Exception in {func.__qualname__}: {e}", exc_info=True)
+            logging.error(
+                f"Exception in {func.__qualname__}: {e}",
+                exc_info=True,
+                extra=log_extra,
+            )
             raise
 
     return wrapper
@@ -167,6 +367,37 @@ class TimestampedRotatingFileHandler(RotatingFileHandler):
             self.stream = self._open()
 
 
+def _configure_handler(handler, numeric_log_level):
+    handler.setLevel(numeric_log_level)
+    handler.addFilter(LogTagFilter())
+    handler.setFormatter(TaggedFormatter())
+    return handler
+
+
+def _build_tagged_handler(log_dir, log_prefix, date_str, max_bytes, numeric_log_level, record_filter):
+    handler = TimestampedRotatingFileHandler(
+        filename=os.path.join(log_dir, f"{log_prefix}_{date_str}.log"),
+        maxBytes=max_bytes,
+        backupCount=0,
+    )
+    handler.setLevel(numeric_log_level)
+    handler.addFilter(record_filter)
+    handler.setFormatter(TaggedFormatter())
+    return handler
+
+
+def _configure_root_logger(handlers, numeric_log_level):
+    root_logger = logging.getLogger("")
+    root_logger.setLevel(numeric_log_level)
+    root_logger.addFilter(LogTagFilter())
+    for handler in handlers:
+        root_logger.addHandler(handler)
+
+    for logger_name, _tag in TAG_LOGGER_MAP:
+        logging.getLogger(logger_name).addFilter(LogTagFilter())
+    logging.getLogger("werkzeug").setLevel(logging.WARNING)
+
+
 def setup_logging(log_dir=Config.LOG_PATH, log_prefix=Config.LOG_PREFIX, max_bytes=Config.MAX_BYTES, log_level=Config.LOG_LEVEL):
     """Configures logging for the application.
 
@@ -199,19 +430,22 @@ def setup_logging(log_dir=Config.LOG_PATH, log_prefix=Config.LOG_PREFIX, max_byt
         # Create log directory if it doesn't exist
         os.makedirs(log_dir, exist_ok=True)
 
-        # Set up the custom rotating file handler
+        # Set up the main custom rotating file handler
         handler = TimestampedRotatingFileHandler(
             filename=log_file,
             maxBytes=max_bytes,
             backupCount=0  # No numbered backups, as we're using timestamps
         )
-        handler.setLevel(numeric_log_level)
-        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(filename)s - %(message)s')
-        handler.setFormatter(formatter)
+        _configure_handler(handler, numeric_log_level)
+        handlers = [
+            handler,
+            _build_tagged_handler(log_dir, "LLM", date_str, max_bytes, numeric_log_level, TagOnlyFilter({"LLM"})),
+            _build_tagged_handler(log_dir, "Enrichment", date_str, max_bytes, numeric_log_level, TagOnlyFilter({"enrichment"})),
+            _build_tagged_handler(log_dir, "Errors", date_str, max_bytes, logging.WARNING, MinimumLevelFilter(logging.WARNING)),
+        ]
 
         # Configure the root logger
-        logging.getLogger('').setLevel(numeric_log_level)
-        logging.getLogger('').addHandler(handler)
+        _configure_root_logger(handlers, numeric_log_level)
 
         # Set log levels for specific libraries
         for lib, level_str in Config.LIBRARY_LOG_LEVELS.items():
@@ -227,12 +461,16 @@ def setup_logging(log_dir=Config.LOG_PATH, log_prefix=Config.LOG_PREFIX, max_byt
             maxBytes=max_bytes,
             backupCount=0
         )
-        handler.setLevel(numeric_log_level)
-        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(filename)s - %(message)s')
-        handler.setFormatter(formatter)
+        _configure_handler(handler, numeric_log_level)
+        fallback_dir = os.getcwd()
+        handlers = [
+            handler,
+            _build_tagged_handler(fallback_dir, "LLM", date_str, max_bytes, numeric_log_level, TagOnlyFilter({"LLM"})),
+            _build_tagged_handler(fallback_dir, "Enrichment", date_str, max_bytes, numeric_log_level, TagOnlyFilter({"enrichment"})),
+            _build_tagged_handler(fallback_dir, "Errors", date_str, max_bytes, logging.WARNING, MinimumLevelFilter(logging.WARNING)),
+        ]
 
-        logging.getLogger('').setLevel(numeric_log_level)
-        logging.getLogger('').addHandler(handler)
+        _configure_root_logger(handlers, numeric_log_level)
 
         # Set log levels for specific libraries in fallback mode
         for lib, level_str in Config.LIBRARY_LOG_LEVELS.items():

@@ -8,7 +8,7 @@ from unittest.mock import patch
 # Add the project root to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from config.logging import setup_logging, TimestampedRotatingFileHandler
+from config.logging import LogTagFilter, TaggedFormatter, TimestampedRotatingFileHandler, setup_logging
 
 @pytest.fixture(autouse=True)
 def reset_logging():
@@ -47,6 +47,9 @@ def test_setup_logging_basic_configuration(mock_config, tmp_path):
     expected_log_file = log_dir / f"test_log_{date_str}.log"
     
     assert expected_log_file.exists()
+    assert (log_dir / f"LLM_{date_str}.log").exists()
+    assert (log_dir / f"Enrichment_{date_str}.log").exists()
+    assert (log_dir / f"Errors_{date_str}.log").exists()
     
     root_logger = logging.getLogger('')
     assert root_logger.level == logging.DEBUG
@@ -54,7 +57,7 @@ def test_setup_logging_basic_configuration(mock_config, tmp_path):
     # Check that our handler was added, ignoring pytest's own handlers
     handler = next((h for h in reversed(root_logger.handlers) if isinstance(h, TimestampedRotatingFileHandler)), None)
     assert handler is not None
-    assert handler.baseFilename == str(expected_log_file)
+    assert any(h.baseFilename == str(expected_log_file) for h in root_logger.handlers if isinstance(h, TimestampedRotatingFileHandler))
     assert handler.maxBytes == mock_config.MAX_BYTES
 
 
@@ -230,3 +233,71 @@ def test_setup_logging_invalid_log_level(mock_config, tmp_path):
     # Assert
     root_logger = logging.getLogger('')
     assert root_logger.level == logging.INFO
+
+
+def test_tagged_formatter_omits_filename_for_info():
+    record = logging.LogRecord(
+        name="root",
+        level=logging.INFO,
+        pathname=os.path.join("backend", "database.py"),
+        lineno=1,
+        msg="Database initialized",
+        args=(),
+        exc_info=None,
+    )
+    LogTagFilter().filter(record)
+
+    rendered = TaggedFormatter().format(record)
+
+    assert " - INFO - [database] - Database initialized" in rendered
+    assert "database.py - Database initialized" not in rendered
+
+
+def test_tagged_formatter_includes_filename_for_warning():
+    record = logging.LogRecord(
+        name="root",
+        level=logging.WARNING,
+        pathname=os.path.join("backend", "scripts", "scraping", "sitemap_parser.py"),
+        lineno=1,
+        msg="Sitemap failed",
+        args=(),
+        exc_info=None,
+    )
+    LogTagFilter().filter(record)
+
+    rendered = TaggedFormatter().format(record)
+
+    assert " - WARNING - [enrichment] - sitemap_parser.py - Sitemap failed" in rendered
+
+
+def test_log_tag_filter_supports_explicit_override():
+    record = logging.LogRecord(
+        name="root",
+        level=logging.INFO,
+        pathname=os.path.join("backend", "routes", "api.py"),
+        lineno=1,
+        msg="LLM route log",
+        args=(),
+        exc_info=None,
+    )
+    record.log_tag = "LLM"
+
+    LogTagFilter().filter(record)
+
+    assert record.log_tag == "LLM"
+
+
+def test_log_tag_filter_falls_back_to_app():
+    record = logging.LogRecord(
+        name="root",
+        level=logging.INFO,
+        pathname="unknown.py",
+        lineno=1,
+        msg="Unknown",
+        args=(),
+        exc_info=None,
+    )
+
+    LogTagFilter().filter(record)
+
+    assert record.log_tag == "app"

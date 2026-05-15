@@ -1,9 +1,11 @@
 import json
 import logging
+import time
 
 import requests
 
 from backend.app_settings import Config
+from config.logging import format_debug_payload, sanitize_for_logging
 
 
 class EmailGenerationError(Exception):
@@ -16,6 +18,8 @@ class EmailGenerationBlocked(Exception):
 
 BLOCKED_GENERATION_STAGES = {"contacted", "replied", "closed", "skipped", "do_not_contact"}
 SUPPORTED_PROVIDERS = {"openai", "anthropic"}
+OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
+ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 
 
 def _clean(value):
@@ -124,8 +128,19 @@ def _generate_openai(model, system_prompt, user_content):
     if _supports_openai_chat_temperature(model):
         payload["temperature"] = 0.5
 
+    started_at = time.perf_counter()
+    logging.info("OpenAI request to %s model=%s", OPENAI_CHAT_COMPLETIONS_URL, model)
+    logging.debug(
+        "OpenAI request details %s",
+        format_debug_payload({
+            "url": OPENAI_CHAT_COMPLETIONS_URL,
+            "headers": {"Authorization": "<redacted>", "Content-Type": "application/json"},
+            "json": _sanitize_llm_request(payload),
+            "timeout": 45,
+        }),
+    )
     response = requests.post(
-        "https://api.openai.com/v1/chat/completions",
+        OPENAI_CHAT_COMPLETIONS_URL,
         headers={
             "Authorization": f"Bearer {Config.OPENAI_API_KEY}",
             "Content-Type": "application/json",
@@ -133,8 +148,17 @@ def _generate_openai(model, system_prompt, user_content):
         json=payload,
         timeout=45,
     )
+    elapsed_ms = round((time.perf_counter() - started_at) * 1000)
+    logging.debug(
+        "OpenAI response details %s",
+        format_debug_payload({
+            "status_code": response.status_code,
+            "elapsed_ms": elapsed_ms,
+            "body": "<redacted>",
+        }),
+    )
     if response.status_code >= 400:
-        logging.warning("OpenAI email generation failed: %s", response.text[:500])
+        logging.warning("OpenAI email generation failed: %s", _sanitize_llm_error_text(response.text))
         raise EmailGenerationError(f"OpenAI request failed with status {response.status_code}")
 
     data = response.json()
@@ -150,28 +174,72 @@ def _supports_openai_chat_temperature(model):
     return not _clean(model).lower().startswith("gpt-5")
 
 
+def _sanitize_llm_request(payload):
+    sanitized = sanitize_for_logging(payload, redact_keys={"content", "system"})
+    if isinstance(sanitized, dict) and "messages" in sanitized:
+        sanitized["messages"] = [
+            {
+                **message,
+                "content": "<redacted>",
+            }
+            if isinstance(message, dict)
+            else message
+            for message in sanitized["messages"]
+        ]
+    return sanitized
+
+
+def _sanitize_llm_error_text(text):
+    return format_debug_payload({"provider_response": _clean(text)[:500]})
+
+
 def _generate_anthropic(model, system_prompt, user_content):
     if not Config.ANTHROPIC_API_KEY:
         raise EmailGenerationError("ANTHROPIC_API_KEY is not configured")
 
+    payload = {
+        "model": model,
+        "system": system_prompt,
+        "messages": [{"role": "user", "content": user_content}],
+        "max_tokens": 900,
+        "temperature": 0.8,
+    }
+    started_at = time.perf_counter()
+    logging.info("Anthropic request to %s model=%s", ANTHROPIC_MESSAGES_URL, model)
+    logging.debug(
+        "Anthropic request details %s",
+        format_debug_payload({
+            "url": ANTHROPIC_MESSAGES_URL,
+            "headers": {
+                "x-api-key": "<redacted>",
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            },
+            "json": _sanitize_llm_request(payload),
+            "timeout": 45,
+        }),
+    )
     response = requests.post(
-        "https://api.anthropic.com/v1/messages",
+        ANTHROPIC_MESSAGES_URL,
         headers={
             "x-api-key": Config.ANTHROPIC_API_KEY,
             "anthropic-version": "2023-06-01",
             "Content-Type": "application/json",
         },
-        json={
-            "model": model,
-            "system": system_prompt,
-            "messages": [{"role": "user", "content": user_content}],
-            "max_tokens": 900,
-            "temperature": 0.5,
-        },
+        json=payload,
         timeout=45,
     )
+    elapsed_ms = round((time.perf_counter() - started_at) * 1000)
+    logging.debug(
+        "Anthropic response details %s",
+        format_debug_payload({
+            "status_code": response.status_code,
+            "elapsed_ms": elapsed_ms,
+            "body": "<redacted>",
+        }),
+    )
     if response.status_code >= 400:
-        logging.warning("Anthropic email generation failed: %s", response.text[:500])
+        logging.warning("Anthropic email generation failed: %s", _sanitize_llm_error_text(response.text))
         raise EmailGenerationError(f"Anthropic request failed with status {response.status_code}")
 
     data = response.json()

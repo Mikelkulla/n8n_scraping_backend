@@ -1,5 +1,6 @@
 import os
 import sys
+import logging
 from unittest.mock import patch
 
 from flask import Flask
@@ -131,6 +132,27 @@ def test_generate_email_saves_draft_without_overwriting_final(tmp_path):
     assert payload["stage"] == "drafted"
 
 
+def test_api_info_logs_method_and_path_only(tmp_path, caplog):
+    db_path = str(tmp_path / "test.db")
+    _, campaign_lead_id = seed_campaign_lead(db_path, final_email="Final approved")
+    client, db_factory = create_test_client(db_path)
+
+    caplog.set_level(logging.INFO)
+    caplog.clear()
+    with patch("backend.routes.api.Database", side_effect=db_factory):
+        with patch("backend.routes.api.generate_email_draft", return_value="Generated draft"):
+            response = client.post(f"/api/campaign-leads/{campaign_lead_id}/generate-email")
+
+    assert response.status_code == 200
+    api_records = [
+        record for record in caplog.records
+        if getattr(record, "log_tag", None) == "api"
+        and record.getMessage() == f"POST /api/campaign-leads/{campaign_lead_id}/generate-email"
+    ]
+    assert api_records
+    assert "Generated draft" not in "\n".join(record.getMessage() for record in caplog.records if record.levelno == logging.INFO)
+
+
 def test_generate_email_allows_approved_lead_manual_regeneration(tmp_path):
     db_path = str(tmp_path / "test.db")
     _, campaign_lead_id = seed_campaign_lead(db_path, stage="approved", final_email="Final approved")
@@ -207,6 +229,29 @@ def test_openai_gpt5_payload_omits_temperature():
         with patch("backend.ai_email_service.requests.post", return_value=FakeResponse()) as post:
             assert _generate_openai("gpt-4.1-mini", "System", "User") == "Draft"
             assert post.call_args.kwargs["json"]["temperature"] == 0.5
+
+
+def test_openai_logging_redacts_secret_request_and_response_content(caplog):
+    from backend.ai_email_service import _generate_openai
+
+    class FakeResponse:
+        status_code = 200
+        text = "provider text with generated body"
+
+        def json(self):
+            return {"choices": [{"message": {"content": "Generated secret draft"}}]}
+
+    caplog.set_level(logging.DEBUG)
+    with patch("backend.ai_email_service.Config.OPENAI_API_KEY", "secret-api-key"):
+        with patch("backend.ai_email_service.requests.post", return_value=FakeResponse()):
+            assert _generate_openai("gpt-4.1-mini", "System secret", "User secret prompt") == "Generated secret draft"
+
+    log_text = "\n".join(record.getMessage() for record in caplog.records)
+    assert "https://api.openai.com/v1/chat/completions" in log_text
+    assert "secret-api-key" not in log_text
+    assert "System secret" not in log_text
+    assert "User secret prompt" not in log_text
+    assert "Generated secret draft" not in log_text
 
 
 def test_email_category_rule_routes_apply_unknowns(tmp_path):

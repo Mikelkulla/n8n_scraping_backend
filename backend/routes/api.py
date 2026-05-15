@@ -23,6 +23,7 @@ api_bp = Blueprint("api", __name__)
 active_jobs = {}
 BULK_EMAIL_GENERATION_EXTRA_BLOCKED_STAGES = {"approved"}
 APP_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+ENRICHMENT_LOG_EXTRA = {"log_tag": "enrichment"}
 
 def _scrape_and_store_lead_enrichment(
     lead,
@@ -43,7 +44,7 @@ def _scrape_and_store_lead_enrichment(
         return True
 
     if not website:
-        logging.warning(f"Lead {lead_id} has no website - skipping.")
+        logging.warning(f"Lead {lead_id} has no website - skipping.", extra=ENRICHMENT_LOG_EXTRA)
         with Database() as db:
             db.update_lead(
                 place_id=place_id,
@@ -55,7 +56,7 @@ def _scrape_and_store_lead_enrichment(
 
     validated_url, url_error = validate_url(website)
     if url_error:
-        logging.warning(f"Lead {lead_id} has invalid URL ({website}): {url_error}")
+        logging.warning(f"Lead {lead_id} has invalid URL ({website}): {url_error}", extra=ENRICHMENT_LOG_EXTRA)
         with Database() as db:
             db.update_lead(
                 place_id=place_id,
@@ -66,7 +67,10 @@ def _scrape_and_store_lead_enrichment(
         return False
 
     sub_job_id = str(uuid.uuid4())
-    logging.info(f"Scraping emails and website context for lead {lead_id} ({validated_url})")
+    logging.info(
+        f"Scraping emails and website context for lead {lead_id} ({validated_url})",
+        extra=ENRICHMENT_LOG_EXTRA,
+    )
     result = scrape_emails_with_summary(
         sub_job_id,
         "email_scrape",
@@ -80,7 +84,10 @@ def _scrape_and_store_lead_enrichment(
         stop_step_id=stop_step_id,
     )
     if stop_job_id and stop_step_id and check_stop_signal(stop_job_id, stop_step_id):
-        logging.info(f"Stop signal received while scraping lead {lead_id}; skipping lead update.")
+        logging.info(
+            f"Stop signal received while scraping lead {lead_id}; skipping lead update.",
+            extra=ENRICHMENT_LOG_EXTRA,
+        )
         return True
 
     valid_emails = validate_emails(result.get("emails", []))
@@ -98,7 +105,8 @@ def _scrape_and_store_lead_enrichment(
             summary_status=summary_status,
         )
     logging.info(
-        f"Lead {lead_id}: stored {len(valid_emails)} email(s), summary_status={summary_status}."
+        f"Lead {lead_id}: stored {len(valid_emails)} email(s), summary_status={summary_status}.",
+        extra=ENRICHMENT_LOG_EXTRA,
     )
     return False
 
@@ -476,7 +484,10 @@ def scrape_leads_emails():
                 for lead in leads:
                     # Check stop signal before each lead
                     if check_stop_signal(job_id, step_id):
-                        logging.info(f"Stop signal received for job {job_id} after {processed}/{total} leads.")
+                        logging.info(
+                            f"Stop signal received for job {job_id} after {processed}/{total} leads.",
+                            extra=ENRICHMENT_LOG_EXTRA,
+                        )
                         write_progress(job_id, step_id, input=job_input, status="stopped",
                                        current_row=processed, total_rows=total)
                         return
@@ -493,7 +504,10 @@ def scrape_leads_emails():
                             stop_step_id=step_id,
                         )
                     except Exception as e:
-                        logging.error(f"Failed to scrape lead {lead.get('lead_id', 'unknown')}: {e}")
+                        logging.error(
+                            f"Failed to scrape lead {lead.get('lead_id', 'unknown')}: {e}",
+                            extra=ENRICHMENT_LOG_EXTRA,
+                        )
                         try:
                             with Database() as db:
                                 db.update_lead(
@@ -503,10 +517,16 @@ def scrape_leads_emails():
                                     summary_status="failed",
                                 )
                         except Exception as db_err:
-                            logging.error(f"Failed to mark lead {lead.get('lead_id', 'unknown')} as failed in DB: {db_err}")
+                            logging.error(
+                                f"Failed to mark lead {lead.get('lead_id', 'unknown')} as failed in DB: {db_err}",
+                                extra=ENRICHMENT_LOG_EXTRA,
+                            )
 
                     if stopped or check_stop_signal(job_id, step_id):
-                        logging.info(f"Stop signal received for job {job_id} while processing lead.")
+                        logging.info(
+                            f"Stop signal received for job {job_id} while processing lead.",
+                            extra=ENRICHMENT_LOG_EXTRA,
+                        )
                         write_progress(job_id, step_id, input=job_input, status="stopped",
                                        current_row=processed, total_rows=total)
                         return

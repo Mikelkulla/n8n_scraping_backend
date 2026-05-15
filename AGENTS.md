@@ -40,6 +40,11 @@ This is currently a local personal project. There is no authentication. Do not e
 
 ## Commands
 
+IMPORTANT user-run command rule:
+- Do not run project commands yourself in this repository unless the user explicitly asks you to execute them.
+- When verification, setup, tests, builds, dev servers, or other terminal commands are needed, provide the exact commands for the user to run.
+- The user should run those commands manually and share the output if they want help interpreting or fixing failures.
+
 ```bash
 # Backend dependencies
 pip install -r requirements.txt
@@ -707,7 +712,17 @@ The left navigation sidebar can collapse/expand through the small top-left icon.
 
 ## Logging
 
-- `@log_function_call` wraps functions and logs entry, return values, Flask responses, and exceptions.
+- Logs use one main daily rotating file with bracketed source tags such as `[api]`, `[places]`, `[LLM]`, `[database]`, `[enrichment]`, `[selenium]`, `[jobs]`, and fallback `[app]`.
+- `setup_logging()` also writes focused daily rotating files in `backend/log_files/`: `LLM_*.log` for `[LLM]`, `Enrichment_*.log` for `[enrichment]`, and `Errors_*.log` for all `WARNING`/`ERROR`/`CRITICAL` records.
+- `config/logging.py` owns tag assignment through `LogTagFilter`; it maps module paths/logger names to tags and also supports explicit `extra={"log_tag": "..."}` overrides.
+- `TaggedFormatter` omits filenames for `INFO` logs and includes filenames for `DEBUG`, `WARNING`, `ERROR`, and `CRITICAL` logs.
+- `@log_function_call` wraps API functions. In a Flask request context, `INFO` logs only method and path, while `DEBUG` logs sanitized request and response details.
+- API request logging is only emitted once for actual route handlers; decorated helper/database calls inside a request must not repeat the same `METHOD /path` line.
+- Decorated function debug logs omit raw arguments and raw return values to avoid logging prompts, generated emails, website summaries, lead records, or other large/sensitive payloads.
+- Werkzeug access logs are suppressed below `WARNING` because custom `[api]` request logs already record the route path.
+- API `DEBUG` response logs summarize or omit verbose fields such as `email_draft`, `final_email`, `website_summary`, `leads`, `emails`, `system_prompt`, and `user_prompt`.
+- Google Places HTTP calls log requested endpoint URLs at `INFO`; sanitized request/response details, including redacted API keys, are logged at `DEBUG`.
+- LLM provider calls log provider/model/URL at `INFO`; sanitized request/response metadata is logged at `DEBUG` without API keys, prompts, or generated email bodies.
 - `@log_all_methods` wraps every method on decorated classes, currently used on `Database`.
 - Log files rotate at 100 MB and are stored in `backend/log_files/`.
 - `backend/app.py` reconfigures stdout/stderr as UTF-8 with replacement to avoid Windows console logging failures for Google Places names containing special Unicode.
