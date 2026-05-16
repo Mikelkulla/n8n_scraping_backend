@@ -2,6 +2,7 @@ export * from "./healthApi";
 export * from "./httpClient";
 export * from "./campaignsApi";
 export * from "./emailRulesApi";
+export * from "./gmailApi";
 export * from "./emailSettingsApi";
 export * from "./jobsApi";
 export * from "./leadsApi";

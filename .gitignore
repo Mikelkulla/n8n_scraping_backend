@@ -6,6 +6,8 @@ __pycache__/
 
 # Environment files
 .env
+config/gmail_client_secret.json
+config/*token*.json
 venv
 .coverage
 .vscode

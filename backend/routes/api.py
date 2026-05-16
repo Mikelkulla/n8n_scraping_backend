@@ -13,6 +13,14 @@ from backend.ai_email_service import (
     generate_email_draft,
     validate_generation_target,
 )
+from backend.gmail_service import (
+    GmailIntegrationError,
+    create_gmail_draft,
+    disconnect_gmail,
+    finish_gmail_auth,
+    get_gmail_status,
+    start_gmail_auth,
+)
 import logging
 from config.logging import apply_log_level, log_function_call
 from config.utils import validate_emails, validate_url
@@ -24,6 +32,7 @@ active_jobs = {}
 BULK_EMAIL_GENERATION_EXTRA_BLOCKED_STAGES = {"approved"}
 APP_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 ENRICHMENT_LOG_EXTRA = {"log_tag": "enrichment"}
+GMAIL_DRAFT_BLOCKED_STAGES = {"contacted", "closed", "skipped", "do_not_contact"}
 
 def _scrape_and_store_lead_enrichment(
     lead,
@@ -716,6 +725,28 @@ def _validate_business_rule_payload(data):
     }
 
 
+def _gmail_redirect_uri():
+    return request.host_url.rstrip("/") + "/api/gmail/auth/callback"
+
+
+def _campaign_lead_recipient(lead):
+    candidates = []
+    if lead.get("primary_email"):
+        candidates.append(lead.get("primary_email"))
+    candidates.extend([
+        email.strip()
+        for email in str(lead.get("emails") or "").split(",")
+        if email.strip()
+    ])
+    valid = validate_emails(candidates)
+    return valid[0] if valid else None
+
+
+def _gmail_draft_subject(lead):
+    lead_name = str(lead.get("name") or "").strip()
+    return f"Quick question for {lead_name}" if lead_name else "Quick question"
+
+
 @api_bp.route("/email-settings", methods=["GET"])
 @log_function_call
 def get_email_settings():
@@ -726,6 +757,66 @@ def get_email_settings():
         return jsonify({"settings": settings}), 200
     except Exception as e:
         logging.error(f"Error fetching email settings: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/gmail/status", methods=["GET"])
+@log_function_call
+def gmail_status():
+    """Returns Gmail integration status without exposing OAuth tokens."""
+    try:
+        return jsonify({"gmail": get_gmail_status()}), 200
+    except Exception as e:
+        logging.error(f"Error fetching Gmail status: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/gmail/auth/start", methods=["POST"])
+@log_function_call
+def gmail_auth_start():
+    """Starts the local Gmail OAuth flow."""
+    try:
+        data = request.get_json() or {}
+        redirect_uri = data.get("redirect_uri") or _gmail_redirect_uri()
+        return jsonify(start_gmail_auth(redirect_uri)), 200
+    except GmailIntegrationError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logging.error(f"Error starting Gmail auth: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/gmail/auth/callback", methods=["GET", "POST"])
+@log_function_call
+def gmail_auth_callback():
+    """Completes Gmail OAuth from either a browser redirect or frontend POST."""
+    try:
+        data = request.get_json(silent=True) or {}
+        code = data.get("code") or request.args.get("code")
+        state = data.get("state") or request.args.get("state")
+        redirect_uri = data.get("redirect_uri") or _gmail_redirect_uri()
+        status = finish_gmail_auth(code=code, state=state, redirect_uri=redirect_uri)
+        if request.method == "GET":
+            return Response(
+                "Gmail connected. You can close this tab and return to the scraping console.",
+                mimetype="text/plain",
+            )
+        return jsonify({"gmail": status}), 200
+    except GmailIntegrationError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logging.error(f"Error completing Gmail auth: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/gmail/disconnect", methods=["POST"])
+@log_function_call
+def gmail_disconnect():
+    """Deletes the local Gmail OAuth token."""
+    try:
+        return jsonify({"gmail": disconnect_gmail()}), 200
+    except Exception as e:
+        logging.error(f"Error disconnecting Gmail: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -1049,6 +1140,57 @@ def generate_campaign_lead_email(campaign_lead_id):
         return jsonify({"error": str(e)}), 502
     except Exception as e:
         logging.error(f"Error generating email for campaign lead {campaign_lead_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/campaign-leads/<int:campaign_lead_id>/gmail-draft", methods=["POST"])
+@log_function_call
+def create_campaign_lead_gmail_draft(campaign_lead_id):
+    """Creates one Gmail draft from a reviewed campaign lead final email."""
+    try:
+        with Database() as db:
+            lead = db.get_campaign_lead(campaign_lead_id)
+
+        if not lead:
+            return jsonify({"error": f"Campaign lead {campaign_lead_id} not found"}), 404
+
+        stage = lead.get("stage")
+        if stage in GMAIL_DRAFT_BLOCKED_STAGES:
+            return jsonify({"error": f"Cannot create Gmail draft for stage '{stage}'"}), 400
+        if not str(lead.get("final_email") or "").strip():
+            return jsonify({"error": "final_email is required before creating a Gmail draft"}), 400
+
+        recipient = _campaign_lead_recipient(lead)
+        if not recipient:
+            return jsonify({"error": "A valid recipient email is required before creating a Gmail draft"}), 400
+
+        try:
+            draft = create_gmail_draft(
+                to_email=recipient,
+                subject=_gmail_draft_subject(lead),
+                body=lead["final_email"],
+            )
+        except GmailIntegrationError as e:
+            with Database() as db:
+                db.store_gmail_draft_metadata(
+                    campaign_lead_id,
+                    status="failed",
+                    error=str(e),
+                )
+            return jsonify({"error": str(e)}), 400
+
+        with Database() as db:
+            campaign_lead = db.store_gmail_draft_metadata(
+                campaign_lead_id,
+                draft_id=draft.get("draft_id"),
+                message_id=draft.get("message_id"),
+                status="created",
+                error=None,
+            )
+
+        return jsonify({"campaign_lead": campaign_lead}), 200
+    except Exception as e:
+        logging.error(f"Error creating Gmail draft for campaign lead {campaign_lead_id}: {e}")
         return jsonify({"error": str(e)}), 500
 
 

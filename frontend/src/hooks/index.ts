@@ -2,6 +2,7 @@ export * from "./queryKeys";
 export * from "./useBackendHealth";
 export * from "./useCampaigns";
 export * from "./useEmailRules";
+export * from "./useGmail";
 export * from "./useEmailSettings";
 export * from "./useJobPolling";
 export * from "./useLeadsExport";

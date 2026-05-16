@@ -316,6 +316,11 @@ export type CampaignLead = {
   final_email?: string | null;
   campaign_notes?: string | null;
   contacted_at?: string | null;
+  gmail_draft_id?: string | null;
+  gmail_message_id?: string | null;
+  gmail_draft_status?: string | null;
+  gmail_drafted_at?: string | null;
+  gmail_error?: string | null;
   created_at: string;
   updated_at: string;
   execution_id?: number;
@@ -372,6 +377,29 @@ export type UpdateCampaignLeadRequest = {
 
 export type CampaignLeadResponse = {
   campaign_lead: CampaignLead;
+};
+
+export type GmailStatus = {
+  configured: boolean;
+  authenticated: boolean;
+  account_email?: string | null;
+  scopes: string[];
+  client_secret_path: string;
+  token_path: string;
+};
+
+export type GmailStatusResponse = {
+  gmail: GmailStatus;
+};
+
+export type GmailAuthStartRequest = {
+  redirect_uri?: string;
+};
+
+export type GmailAuthStartResponse = {
+  authorization_url: string;
+  state: string;
+  redirect_uri: string;
 };
 
 export type AiEmailProvider = "openai" | "anthropic";

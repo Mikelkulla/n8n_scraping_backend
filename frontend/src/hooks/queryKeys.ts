@@ -14,5 +14,6 @@ export const queryKeys = {
   businessTypeEmailRules: ["business-type-email-rules"] as const,
   emailCategoryRules: ["email-category-rules"] as const,
   unknownEmailLocalParts: ["unknown-email-local-parts"] as const,
+  gmailStatus: ["gmail", "status"] as const,
   exportLeads: ["export-leads"] as const,
 };

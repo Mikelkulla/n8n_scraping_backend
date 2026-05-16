@@ -35,6 +35,7 @@ Primary capabilities:
 8. Campaign workflow: create curated outreach lists from filtered leads, track campaign-specific stages, notes, final email text, contacted state, and export campaign leads.
 9. AI-assisted campaign email drafting: generate provider-backed outreach drafts from campaign lead context for manual review and approval.
 10. Email category rule management: automatically categorize generic scraped emails by exact local-part rules and review unknown patterns.
+11. Gmail draft creation: connect a local Gmail account with OAuth and create one reviewed campaign email draft at a time from `campaign_leads.final_email`.
 
 This is currently a local personal project. There is no authentication. Do not expose the backend publicly without adding auth, request caps, and rate limiting.
 
@@ -85,6 +86,10 @@ npm run build
 Required before running backend:
 - Create `.env` in project root with `GOOGLE_API_KEY='YOUR_KEY'`.
 - Place ChromeDriver/GeckoDriver binaries in `config/drivers/` if local Selenium requires them.
+- For Gmail draft creation, enable the Gmail API in Google Cloud, create an OAuth client, and place the downloaded OAuth client JSON at `config/gmail_client_secret.json`. Gmail user tokens are stored locally at `backend/temp/gmail_token.json`.
+- For the default Gmail OAuth flow, register this exact authorized redirect URI in the Google Cloud OAuth client: `http://localhost:5000/api/gmail/auth/callback`. If the backend port changes, register the matching callback URL.
+- If the Google OAuth consent screen is in Testing mode, add the Gmail account as a test user before connecting from Settings.
+- Do not commit `config/gmail_client_secret.json`, `backend/temp/gmail_token.json`, or any OAuth token/client secret files.
 
 Run backend and frontend in separate terminals:
 
@@ -137,6 +142,7 @@ User action in React page
 | `backend/database.py` | `Database` class, explicit SQLite initialization/migrations, context manager, thread-safe lock, query methods for jobs, leads, email review, and campaigns |
 | `backend/app_settings.py` | `Config` class for paths, env vars, driver locations, log settings |
 | `backend/ai_email_service.py` | Provider-neutral AI email draft generation wrapper for OpenAI and Anthropic |
+| `backend/gmail_service.py` | Local Gmail OAuth and Gmail API draft creation service using `gmail.compose` scope |
 | `config/job_functions.py` | `write_progress()` upserts job state; `check_stop_signal()` reads DB stop flag |
 | `config/logging.py` | `log_function_call` and `log_all_methods` decorators |
 | `config/utils.py` | URL validation, email validation, exact/subdomain non-business domain filtering |
@@ -164,6 +170,7 @@ Initialization behavior:
 - `backend/app.py` calls `Database().initialize()` once at Flask startup after `Config.init_dirs()`.
 - Tests that create temporary databases must call `Database(db_path=...).initialize()` before opening the DB with the context manager.
 - Migrations use SQLite `PRAGMA user_version`. Version `1` creates the current schema, seeds default settings/category rules, migrates global lead uniqueness/discovery history, and backfills legacy comma-separated `leads.emails` values into `lead_emails`.
+- Already-versioned local databases also run cheap additive compatibility migrations on startup, currently used to add Gmail draft metadata columns to existing `campaign_leads` tables without bumping `PRAGMA user_version`.
 - Request/progress hot paths such as `write_progress()`, `check_stop_signal()`, route handlers, and polling endpoints should construct `Database()` without rerunning schema setup or global backfills.
 
 ### `job_executions`
@@ -248,6 +255,7 @@ Important columns:
 - `stage`: `review`, `ready_for_email`, `drafted`, `approved`, `contacted`, `replied`, `closed`, `skipped`, or `do_not_contact`.
 - `priority`, `email_draft`, `final_email`, `campaign_notes`.
 - `contacted_at`, `created_at`, `updated_at`.
+- `gmail_draft_id`, `gmail_message_id`, `gmail_draft_status`, `gmail_drafted_at`, `gmail_error`: Gmail draft creation metadata for reviewed final emails.
 
 Uniqueness:
 - Campaign lead membership is unique by `(campaign_id, lead_id)`.
@@ -268,6 +276,7 @@ Current operational settings keys:
 - `places_place_type`, `places_max_places`, `places_radius`: defaults for Google Places discovery forms. `places_radius` is retained for compatibility, but the current Text Search flow ignores radius.
 
 API keys are not stored in SQLite and are never returned to the frontend. They are read from environment variables.
+Gmail OAuth secrets/tokens are not stored in SQLite. The OAuth client file lives at `config/gmail_client_secret.json`; the user token lives at `backend/temp/gmail_token.json`.
 
 ### `business_type_email_rules`
 
@@ -348,6 +357,11 @@ All API endpoints are mounted under `/api`, except Flask root health check `/`.
 | `PATCH` | `/api/app-settings` | Update operational app settings | Editable: logging verbosity, scraper defaults, scraper max threads, Google Places defaults; never accepts secrets |
 | `GET` | `/api/email-settings/business-types` | List business-type email personalization rules | Used by Settings and campaign detail context |
 | `PUT` | `/api/email-settings/business-types/<business_type>` | Create/update one business-type email rule | Stores description, pain point, offer angle, extra instructions |
+| `GET` | `/api/gmail/status` | Read Gmail integration status | Returns configured/authenticated/account status and safe local paths; never returns tokens |
+| `POST` | `/api/gmail/auth/start` | Start Gmail OAuth | Returns Google authorization URL for `gmail.compose` |
+| `GET/POST` | `/api/gmail/auth/callback` | Complete Gmail OAuth | Stores refreshable local token in `backend/temp/gmail_token.json` |
+| `POST` | `/api/gmail/disconnect` | Disconnect Gmail | Deletes the local Gmail token |
+| `POST` | `/api/campaign-leads/<campaign_lead_id>/gmail-draft` | Create one Gmail draft | Uses `final_email` only; does not send email |
 | `GET` | `/api/email-category-rules` | List email category auto-marking rules | Returns available categories and rules |
 | `PUT` | `/api/email-category-rules/<pattern>` | Create/update an exact local-part category rule | Category must be non-unknown |
 | `GET` | `/api/lead-emails/unknown` | List unknown email local-parts | Shows count and example email for rule creation |
@@ -610,10 +624,10 @@ Pages in `frontend/src/App.tsx`:
 | Website Emails | One-off website email scrape | `/api/scrape/website-emails` |
 | Enrich Leads | Start bulk email enrichment and poll progress | `/api/scrape/leads-emails`, `/api/progress/<job_id>`, `/api/stop/<job_id>` |
 | Leads | List/filter leads, row actions, detail panel, manual edits, CSV export | `/api/leads`, `/api/leads/<lead_id>`, `/api/leads/export` |
-| Campaigns | Create campaigns from lead filters, review campaign leads, generate AI drafts, update stages/priority/notes/final email, export campaign CSV | `/api/campaigns`, `/api/campaigns/<campaign_id>`, `/api/campaigns/<campaign_id>/leads`, `/api/campaign-leads/<campaign_lead_id>`, `/api/campaign-leads/<campaign_lead_id>/generate-email`, `/api/campaigns/<campaign_id>/generate-emails`, `/api/campaigns/<campaign_id>/export` |
+| Campaigns | Create campaigns from lead filters, review campaign leads, generate AI drafts, create Gmail drafts from final emails, update stages/priority/notes/final email, export campaign CSV | `/api/campaigns`, `/api/campaigns/<campaign_id>`, `/api/campaigns/<campaign_id>/leads`, `/api/campaign-leads/<campaign_lead_id>`, `/api/campaign-leads/<campaign_lead_id>/generate-email`, `/api/campaign-leads/<campaign_lead_id>/gmail-draft`, `/api/campaigns/<campaign_id>/generate-emails`, `/api/campaigns/<campaign_id>/export` |
 | Jobs | List/filter job history, select job details, stop running jobs | `/api/jobs`, `/api/progress/<job_id>`, `/api/stop/<job_id>` |
 | Email Rules | Review unknown email local-parts, create exact local-part category rules, and reapply rules to unknown emails | `/api/email-category-rules`, `/api/lead-emails/unknown` |
-| Settings | Configure AI drafting, operational defaults, logging verbosity, scraper defaults, Google Places defaults, environment status, and business-type personalization rules | `/api/email-settings`, `/api/app-settings`, `/api/email-settings/business-types`, `/api/leads/filter-options` |
+| Settings | Configure AI drafting, Gmail OAuth connection, operational defaults, logging verbosity, scraper defaults, Google Places defaults, environment status, and business-type personalization rules | `/api/email-settings`, `/api/gmail/status`, `/api/gmail/auth/start`, `/api/gmail/disconnect`, `/api/app-settings`, `/api/email-settings/business-types`, `/api/leads/filter-options` |
 
 Frontend API clients:
 - `frontend/src/api/httpClient.ts`: fetch wrapper, base URLs, `ApiError`, download helper.
@@ -624,6 +638,7 @@ Frontend API clients:
 - `frontend/src/api/summaryApi.ts`: dashboard summary.
 - `frontend/src/api/emailSettingsApi.ts`: AI email settings, operational app settings, and business-type personalization rules.
 - `frontend/src/api/emailRulesApi.ts`: email category rule management and unknown local-part review.
+- `frontend/src/api/gmailApi.ts`: Gmail status, OAuth start, disconnect, and campaign lead Gmail draft creation.
 - `frontend/src/api/types.ts`: shared TypeScript response/request types.
 
 Frontend hooks:
@@ -644,6 +659,10 @@ Frontend hooks:
 - `useBusinessTypeEmailRules()`
 - `useGenerateCampaignLeadEmail()`
 - `useGenerateCampaignEmails()`
+- `useGmailStatus()`
+- `useStartGmailAuth()`
+- `useDisconnectGmail()`
+- `useCreateCampaignLeadGmailDraft()`
 - `useEmailCategoryRules()`
 - `useUnknownEmailLocalParts()`
 - `useApplyEmailCategoryRules()`
@@ -693,6 +712,21 @@ Supports:
 Supports:
 - `Generate visible drafts` batch-generates drafts for the current visible campaign lead filter/search set, capped by the request limit. It skips approved leads and final workflow stages (`contacted`, `replied`, `closed`, `skipped`, `do_not_contact`) so approved copy is not accidentally regenerated in bulk.
 - The per-lead expanded `Generate draft` button can still regenerate an approved lead draft intentionally. Generated drafts never overwrite `final_email`.
+- The expanded campaign lead detail can create one Gmail draft from `final_email` after Gmail is connected in Settings. It requires a valid recipient email and does not send mail automatically. It stores Gmail draft metadata on `campaign_leads` and leaves generated/final email text unchanged.
+
+### Gmail Draft Integration
+
+Behavior:
+- Gmail OAuth uses local files only: `config/gmail_client_secret.json` for the Google OAuth client and `backend/temp/gmail_token.json` for the connected account token.
+- The requested scope is `https://www.googleapis.com/auth/gmail.compose`.
+- The OAuth flow uses Flask callback `GET /api/gmail/auth/callback`; Google Cloud must have `http://localhost:5000/api/gmail/auth/callback` registered as an authorized redirect URI for the default dev server setup.
+- `backend/gmail_service.py` persists the OAuth `state`, `redirect_uri`, and PKCE `code_verifier` in `backend/temp/gmail_oauth_state.json` between auth start and callback. Without the stored verifier, Google returns `(invalid_grant) Missing code verifier`.
+- `POST /api/campaign-leads/<campaign_lead_id>/gmail-draft` uses only reviewed `final_email`; `email_draft` is never sent to Gmail directly.
+- Gmail draft subject is deterministic, not AI-generated: `Quick question for {lead.name}` when the lead has a name, otherwise `Quick question`.
+- Gmail draft creation is blocked for `contacted`, `closed`, `skipped`, and `do_not_contact` campaign stages.
+- Successful Gmail draft creation stores `gmail_draft_id`, `gmail_message_id`, `gmail_draft_status='created'`, and `gmail_drafted_at`, and advances earlier stages to `approved`.
+- Gmail failures store `gmail_draft_status='failed'` and a short `gmail_error`; token material and email bodies should not be logged.
+- If Gmail status or draft creation logs `accessNotConfigured`, enable the Gmail API in the same Google Cloud project as the OAuth client and wait a few minutes for propagation.
 
 ### Dashboard
 
@@ -737,6 +771,8 @@ The left navigation sidebar can collapse/expand through the small top-left icon.
 | `ANTHROPIC_API_KEY` | none | Required when AI email provider is `anthropic` |
 | `LOG_LEVEL` | `INFO` | App log level |
 | `MAX_THREADS` | `5` | Max concurrent email scraping threads |
+| `GMAIL_CLIENT_SECRET_PATH` | `config/gmail_client_secret.json` | Optional override for the local Gmail OAuth client JSON |
+| `GMAIL_TOKEN_PATH` | `backend/temp/gmail_token.json` | Optional override for the local Gmail OAuth user token |
 | `TOR_EXECUTABLE` | OS-specific path | Path to Tor binary |
 | `LIBRARY_LOG_LEVELS` | JSON map | Per-library log suppression |
 
@@ -747,6 +783,7 @@ The left navigation sidebar can collapse/expand through the small top-left icon.
 - `radius` is accepted by `/api/scrape/google-maps` but ignored by the current Google Places Text Search implementation.
 - Frontend is concentrated in `frontend/src/App.tsx`. If the UI grows further, split pages/components into separate files.
 - Clipboard features use `navigator.clipboard`, which works on localhost/secure contexts.
+- Gmail draft creation depends on local Google Cloud OAuth setup: Gmail API enabled, redirect URI registered, and the Gmail account added as a test user while the consent screen is in Testing mode.
 - Manual lead editing supports website, legacy emails string, scrape status, lead flag, lead review status, notes, and captured website context.
 - URL non-business filtering is exact-domain/subdomain based. For example, `booking.com` and `www.booking.com` are blocked, but unrelated legitimate `.co.uk` business sites are not blocked merely because another blocked marketplace domain also uses `.co.uk`.
 

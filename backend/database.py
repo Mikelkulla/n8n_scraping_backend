@@ -161,6 +161,7 @@ class Database:
             if user_version < CURRENT_SCHEMA_VERSION:
                 self._migrate_to_v1(cursor)
                 cursor.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
+            self._run_compatible_additive_migrations(cursor)
 
             conn.commit()
             logging.info(f"Database initialized at {self.db_path}")
@@ -169,6 +170,16 @@ class Database:
         finally:
             if conn:
                 conn.close()
+
+    def _run_compatible_additive_migrations(self, cursor):
+        """Runs cheap additive migrations for already-versioned local databases."""
+        self._add_missing_columns(cursor, "campaign_leads", {
+            "gmail_draft_id": "TEXT",
+            "gmail_message_id": "TEXT",
+            "gmail_draft_status": "TEXT",
+            "gmail_drafted_at": "TIMESTAMP",
+            "gmail_error": "TEXT",
+        })
 
     def _migrate_to_v1(self, cursor):
         """Creates the current schema and migrates pre-versioned databases."""
@@ -342,6 +353,11 @@ class Database:
                 email_draft TEXT,
                 final_email TEXT,
                 campaign_notes TEXT,
+                gmail_draft_id TEXT,
+                gmail_message_id TEXT,
+                gmail_draft_status TEXT,
+                gmail_drafted_at TIMESTAMP,
+                gmail_error TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 contacted_at TIMESTAMP,
@@ -358,6 +374,13 @@ class Database:
             "created_at": "TIMESTAMP",
             "updated_at": "TIMESTAMP",
             "contacted_at": "TIMESTAMP",
+        })
+        self._add_missing_columns(cursor, "campaign_leads", {
+            "gmail_draft_id": "TEXT",
+            "gmail_message_id": "TEXT",
+            "gmail_draft_status": "TEXT",
+            "gmail_drafted_at": "TIMESTAMP",
+            "gmail_error": "TEXT",
         })
 
         cursor.execute("""
@@ -1541,6 +1564,35 @@ class Database:
         row = self.cursor.fetchone()
         if not row:
             return None
+        self.cursor.execute(
+            "UPDATE campaigns SET updated_at = CURRENT_TIMESTAMP WHERE campaign_id = ?",
+            (row["campaign_id"],),
+        )
+        leads = self.list_campaign_leads(row["campaign_id"])
+        return next((lead for lead in leads if lead["campaign_lead_id"] == campaign_lead_id), None)
+
+    def store_gmail_draft_metadata(self, campaign_lead_id, draft_id=None, message_id=None, status="created", error=None):
+        """Stores Gmail draft metadata without changing generated or final email copy."""
+        self.cursor.execute("SELECT campaign_id, stage FROM campaign_leads WHERE campaign_lead_id = ?", (campaign_lead_id,))
+        row = self.cursor.fetchone()
+        if not row:
+            return None
+
+        stage = row["stage"]
+        blocked_stages = {"approved", "contacted", "replied", "closed", "skipped", "do_not_contact"}
+        next_stage = "approved" if status == "created" and stage not in blocked_stages else stage
+
+        self.cursor.execute("""
+            UPDATE campaign_leads
+            SET gmail_draft_id = ?,
+                gmail_message_id = ?,
+                gmail_draft_status = ?,
+                gmail_drafted_at = CASE WHEN ? = 'created' THEN CURRENT_TIMESTAMP ELSE gmail_drafted_at END,
+                gmail_error = ?,
+                stage = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE campaign_lead_id = ?
+        """, (draft_id, message_id, status, status, error, next_stage, campaign_lead_id))
         self.cursor.execute(
             "UPDATE campaigns SET updated_at = CURRENT_TIMESTAMP WHERE campaign_id = ?",
             (row["campaign_id"],),

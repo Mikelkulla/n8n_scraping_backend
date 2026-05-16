@@ -62,6 +62,12 @@ import {
   useUpdateLead,
   useWebsiteEmailScrape,
 } from "./hooks";
+import {
+  useCreateCampaignLeadGmailDraft,
+  useDisconnectGmail,
+  useGmailStatus,
+  useStartGmailAuth,
+} from "./hooks/useGmail";
 import { downloadCampaignExport, downloadExportedLeads } from "./hooks";
 
 type PageId = "dashboard" | "discover" | "website" | "enrich" | "leads" | "campaigns" | "email-rules" | "jobs" | "settings";
@@ -2133,6 +2139,15 @@ function CampaignLeadDetail({
   const [campaignNotes, setCampaignNotes] = useState(lead.campaign_notes ?? "");
   const [emailDraft, setEmailDraft] = useState(lead.email_draft ?? "");
   const [finalEmail, setFinalEmail] = useState(lead.final_email ?? "");
+  const gmailStatus = useGmailStatus();
+  const createGmailDraft = useCreateCampaignLeadGmailDraft();
+  const gmail = gmailStatus.data?.gmail;
+  const canCreateGmailDraft = Boolean(
+    gmail?.authenticated
+      && finalEmail.trim()
+      && lead.campaign_lead_id
+      && !["contacted", "closed", "skipped", "do_not_contact"].includes(lead.stage),
+  );
 
   useEffect(() => {
     setCampaignNotes(lead.campaign_notes ?? "");
@@ -2159,6 +2174,17 @@ function CampaignLeadDetail({
           <span className="label">Contacted</span>
           <strong>{lead.contacted_at || "-"}</strong>
         </div>
+        <div>
+          <span className="label">Gmail draft</span>
+          <strong>{lead.gmail_draft_id || lead.gmail_draft_status || "-"}</strong>
+        </div>
+        <div>
+          <span className="label">Gmail account</span>
+          <strong>{gmail?.authenticated ? gmail.account_email || "Connected" : "Not connected"}</strong>
+        </div>
+        {lead.gmail_error && (
+          <div className="detail-wide alert alert-error">{lead.gmail_error}</div>
+        )}
         <div className="detail-wide">
           <span className="label">Website context</span>
           <p className="context-text">{lead.website_summary || "No captured website context."}</p>
@@ -2242,6 +2268,18 @@ function CampaignLeadDetail({
         <button
           type="button"
           className="secondary"
+          disabled={!canCreateGmailDraft || createGmailDraft.isPending}
+          onClick={() => createGmailDraft.mutate({
+            campaignId: lead.campaign_id,
+            campaignLeadId: lead.campaign_lead_id,
+          })}
+        >
+          {createGmailDraft.isPending ? <Loader2 className="spin" size={17} /> : <Mail size={17} />}
+          Create Gmail draft
+        </button>
+        <button
+          type="button"
+          className="secondary"
           onClick={() => onUpdate(lead, {
             stage: "contacted",
             contacted_at: new Date().toISOString(),
@@ -2251,6 +2289,7 @@ function CampaignLeadDetail({
           Mark contacted
         </button>
       </div>
+      <ErrorAlert error={gmailStatus.error || createGmailDraft.error} />
     </section>
   );
 }
@@ -2915,6 +2954,9 @@ function SettingsPage() {
   const leadFilterOptions = useLeadFilterOptions();
   const businessRules = useBusinessTypeEmailRules();
   const updateBusinessRule = useUpdateBusinessTypeEmailRule();
+  const gmailStatus = useGmailStatus();
+  const startGmailAuth = useStartGmailAuth();
+  const disconnectGmail = useDisconnectGmail();
   const [provider, setProvider] = useState("openai");
   const [model, setModel] = useState("");
   const [customModel, setCustomModel] = useState("");
@@ -3037,6 +3079,60 @@ function SettingsPage() {
               Save email settings
             </button>
             <ErrorAlert error={updateEmailSettings.error} />
+          </div>
+        )}
+      </section>
+      <section className="panel">
+        <div className="section-head">
+          <div>
+            <h2>Gmail drafts</h2>
+            <p>
+              {gmailStatus.data?.gmail.authenticated
+                ? `Connected${gmailStatus.data.gmail.account_email ? ` as ${gmailStatus.data.gmail.account_email}` : ""}`
+                : "Connect Gmail to create reviewed campaign drafts."}
+            </p>
+          </div>
+        </div>
+        {gmailStatus.isLoading ? (
+          <div className="muted">Loading Gmail status...</div>
+        ) : gmailStatus.isError ? (
+          <ErrorAlert error={gmailStatus.error} />
+        ) : (
+          <div className="settings-form">
+            <Field label="OAuth client">
+              <input
+                readOnly
+                value={gmailStatus.data?.gmail.configured ? "Configured" : "Missing config/gmail_client_secret.json"}
+              />
+            </Field>
+            <Field label="Gmail account">
+              <input
+                readOnly
+                value={gmailStatus.data?.gmail.authenticated ? gmailStatus.data.gmail.account_email || "Connected" : "Not connected"}
+              />
+            </Field>
+            <Field label="Token path">
+              <input readOnly value={gmailStatus.data?.gmail.token_path ?? ""} />
+            </Field>
+            <div className="button-row">
+              <button
+                type="button"
+                disabled={startGmailAuth.isPending || !gmailStatus.data?.gmail.configured}
+                onClick={() => startGmailAuth.mutate({})}
+              >
+                {startGmailAuth.isPending ? <Loader2 className="spin" size={17} /> : <Mail size={17} />}
+                Connect Gmail
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                disabled={disconnectGmail.isPending || !gmailStatus.data?.gmail.authenticated}
+                onClick={() => disconnectGmail.mutate()}
+              >
+                Disconnect Gmail
+              </button>
+            </div>
+            <ErrorAlert error={startGmailAuth.error || disconnectGmail.error} />
           </div>
         )}
       </section>

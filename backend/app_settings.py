@@ -27,6 +27,8 @@ class Config:
     MAX_BYTES = 100*1024*1024                                           # Maximum byte number per logfile before rotating it to a new file and appending time ("hh-mm-ss) in the end
     SCRIPTS_PATH = os.path.join(BASE_DIR, "scripts")                    # Path to the script folder
     TEMP_PATH = os.path.join(BASE_DIR, "temp")                          # Path to temp folder (There you can find some scraping results, scraping.db file etc.)
+    GMAIL_CLIENT_SECRET_PATH = os.getenv("GMAIL_CLIENT_SECRET_PATH", os.path.join(ROOT_DIR, "config", "gmail_client_secret.json"))
+    GMAIL_TOKEN_PATH = os.getenv("GMAIL_TOKEN_PATH", os.path.join(TEMP_PATH, "gmail_token.json"))
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")                          # Default log level (e.g., "DEBUG", "INFO", "WARNING")
     
     # Library-specific log levels
