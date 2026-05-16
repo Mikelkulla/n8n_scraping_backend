@@ -316,6 +316,7 @@ export type CampaignLead = {
   final_email?: string | null;
   campaign_notes?: string | null;
   contacted_at?: string | null;
+  gmail_subject?: string | null;
   gmail_draft_id?: string | null;
   gmail_message_id?: string | null;
   gmail_draft_status?: string | null;

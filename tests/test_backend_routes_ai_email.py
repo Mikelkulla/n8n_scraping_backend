@@ -231,6 +231,26 @@ def test_openai_gpt5_payload_omits_temperature():
             assert post.call_args.kwargs["json"]["temperature"] == 0.5
 
 
+def test_generate_email_subject_uses_provider_and_cleans_subject():
+    from backend.ai_email_service import generate_email_subject
+
+    lead = {
+        "name": "Good Dentist",
+        "business_type": "dentist",
+        "final_email": "Reviewed final email body",
+    }
+    settings = {
+        "provider": "openai",
+        "model": "gpt-4.1-mini",
+    }
+
+    with patch("backend.ai_email_service._generate_openai", return_value='Subject: "Less admin for Good Dentist"') as generate:
+        subject = generate_email_subject(lead, settings)
+
+    assert subject == "Less admin for Good Dentist"
+    generate.assert_called_once()
+
+
 def test_openai_logging_redacts_secret_request_and_response_content(caplog):
     from backend.ai_email_service import _generate_openai
 

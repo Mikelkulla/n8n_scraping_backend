@@ -10,6 +10,7 @@ from backend.database import Database, EMAIL_CATEGORY_VALUES
 from backend.ai_email_service import (
     EmailGenerationBlocked,
     EmailGenerationError,
+    generate_email_subject,
     generate_email_draft,
     validate_generation_target,
 )
@@ -742,11 +743,6 @@ def _campaign_lead_recipient(lead):
     return valid[0] if valid else None
 
 
-def _gmail_draft_subject(lead):
-    lead_name = str(lead.get("name") or "").strip()
-    return f"Quick question for {lead_name}" if lead_name else "Quick question"
-
-
 @api_bp.route("/email-settings", methods=["GET"])
 @log_function_call
 def get_email_settings():
@@ -1165,11 +1161,25 @@ def create_campaign_lead_gmail_draft(campaign_lead_id):
             return jsonify({"error": "A valid recipient email is required before creating a Gmail draft"}), 400
 
         try:
+            with Database() as db:
+                settings = db.get_email_settings()
+                rule = db.get_business_type_email_rule(lead.get("business_type")) if lead.get("business_type") else None
+            subject = generate_email_subject(lead, settings, rule)
             draft = create_gmail_draft(
                 to_email=recipient,
-                subject=_gmail_draft_subject(lead),
+                subject=subject,
                 body=lead["final_email"],
             )
+        except EmailGenerationError as e:
+            with Database() as db:
+                db.store_gmail_draft_metadata(
+                    campaign_lead_id,
+                    status="failed",
+                    error=f"Subject generation failed: {str(e)}",
+                )
+            return jsonify({"error": str(e)}), 502
+        except EmailGenerationBlocked as e:
+            return jsonify({"error": str(e)}), 400
         except GmailIntegrationError as e:
             with Database() as db:
                 db.store_gmail_draft_metadata(
@@ -1184,6 +1194,7 @@ def create_campaign_lead_gmail_draft(campaign_lead_id):
                 campaign_lead_id,
                 draft_id=draft.get("draft_id"),
                 message_id=draft.get("message_id"),
+                subject=subject,
                 status="created",
                 error=None,
             )

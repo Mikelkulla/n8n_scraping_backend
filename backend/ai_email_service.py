@@ -114,6 +114,130 @@ def generate_email_draft(lead, settings, business_rule=None):
     return _generate_anthropic(model, system_prompt, user_content)
 
 
+def generate_email_subject(lead, settings, business_rule=None):
+    """Generates a concise Gmail draft subject for a reviewed final email."""
+    if not lead:
+        raise EmailGenerationBlocked("Campaign lead not found")
+    if not _clean(lead.get("final_email")):
+        raise EmailGenerationBlocked("Cannot generate a subject without final_email")
+
+    provider = _clean(settings.get("provider")).lower()
+    model = _clean(settings.get("model"))
+    business_rule = business_rule or {}
+    system_prompt = (
+        "You write concise, curiosity-driven cold outbound email subject lines. "
+        "Return exactly one subject line and nothing else."
+    )
+    user_content = (
+        "Create one cold outbound email subject line for this reviewed outreach email.\n\n"
+        "Style:\n"
+        "- Make it sound like a real person wrote it, not a newsletter or corporate campaign.\n"
+        "- Use a direct, curiosity-driven sales tone.\n"
+        "- Focus on the pain of repetitive manual work, admin drag, missed follow-ups, slow intake, or wasted staff time when relevant.\n"
+        "- It can be slightly provocative, but not insulting or exaggerated.\n"
+        "- Prefer short punchy lines over polished business language.\n\n"
+        "Requirements:\n"
+        "- Return only the subject text.\n"
+        "- 3 to 8 words.\n"
+        "- Under 70 characters.\n"
+        "- If a contact or lead name is present, include it naturally in the subject.\n"
+        "- Use Title Case: capitalize the first letter of each main word.\n"
+        "- Do not invent facts, metrics, competitors, or claims.\n"
+        "- Avoid corporate words like: enhancing, improving, optimizing, streamlining, efficiency, workflow, solution.\n"
+        "- Avoid spam-trigger words like: free, guaranteed, urgent, limited time, act now, winner.\n"
+        "- Avoid questioning always (Is...?). Start with a statement sometimes.\n"
+        "- Avoid emojis, excessive punctuation, and all caps.\n\n"
+        "Good examples:\n"
+        "- Manual work in 2026?\n"
+        "- Repetition is expensive\n"
+        "- Still doing this manually?\n"
+        "- Why is this still manual?\n"
+        "- Your team repeats this daily?\n"
+        "- Anyone fixing this?\n"
+        "- Staff time is expensive\n"
+        "- Follow-ups should not be manual\n"
+        "- Quick thought on admin\n"
+        "- This part looks repetitive\n"
+        "- Worth automating this?\n"
+        "- Same task every day?\n"
+        "- Admin is eating time\n"
+        "- Follow-ups get missed\n"
+        "- Too many manual steps?\n"
+        "- Quick idea for [Name]\n"
+        "- A thought for [Name]\n"
+        "- Could this be automated?\n"
+        "- The admin cost adds up\n"
+        "- Missed replies cost money\n"
+        "- Your staff deserves better\n"
+        "- The repetitive part\n"
+        "- Noticed this at [Name]\n"
+        "- One thing looked repetitive\n"
+        "- This should not be manual\n"
+        "- A small automation idea\n"
+        "- Repeating work gets expensive\n"
+        "- This could run itself\n"
+        "- Admin work hides everywhere\n"
+        "- One task worth automating\n\n"
+
+        "Bad examples:\n"
+        "- Improving Client Management at Mint Dental Clinic\n"
+        "- Enhancing Efficiency for Liberty Dentists' Workflow\n"
+        "- Transform Your Business Operations Today\n"
+        "- Revolutionary Automation Solution\n"
+        "- Save 10 Hours Every Week\n\n"
+        "Context:\n"
+        f"{json.dumps(_subject_context(lead, business_rule), ensure_ascii=False, indent=2)}"
+    )
+
+    if provider not in SUPPORTED_PROVIDERS:
+        raise EmailGenerationError(f"Unsupported AI email provider '{provider}'")
+    if not model:
+        raise EmailGenerationError("AI email model is required")
+
+    if provider == "openai":
+        subject = _generate_openai(model, system_prompt, user_content)
+    else:
+        subject = _generate_anthropic(model, system_prompt, user_content)
+    return _clean_subject(subject)
+
+
+def _subject_context(lead, business_rule):
+    return {
+        "lead": {
+            "name": lead.get("name"),
+            "business_type": lead.get("business_type"),
+            "location": lead.get("search_location") or lead.get("location"),
+            "website": lead.get("website"),
+            "website_summary": lead.get("website_summary"),
+        },
+        "campaign": {
+            "name": lead.get("campaign_name"),
+            "business_type": lead.get("business_type"),
+            "campaign_notes": lead.get("campaign_notes"),
+        },
+        "business_type_rule": {
+            "business_description": business_rule.get("business_description"),
+            "pain_point": business_rule.get("pain_point"),
+            "offer_angle": business_rule.get("offer_angle"),
+            "extra_instructions": business_rule.get("extra_instructions"),
+        },
+        "final_email": lead.get("final_email"),
+    }
+
+
+def _clean_subject(subject):
+    cleaned = _clean(subject)
+    if cleaned.lower().startswith("subject:"):
+        cleaned = cleaned.split(":", 1)[1].strip()
+    cleaned = cleaned.strip("\"'` \t\r\n")
+    cleaned = " ".join(cleaned.split())
+    if len(cleaned) > 90:
+        cleaned = cleaned[:90].rstrip()
+    if not cleaned:
+        raise EmailGenerationError("AI subject generation returned an empty subject")
+    return cleaned
+
+
 def _generate_openai(model, system_prompt, user_content):
     if not Config.OPENAI_API_KEY:
         raise EmailGenerationError("OPENAI_API_KEY is not configured")

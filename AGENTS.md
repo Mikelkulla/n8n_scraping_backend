@@ -722,9 +722,10 @@ Behavior:
 - The OAuth flow uses Flask callback `GET /api/gmail/auth/callback`; Google Cloud must have `http://localhost:5000/api/gmail/auth/callback` registered as an authorized redirect URI for the default dev server setup.
 - `backend/gmail_service.py` persists the OAuth `state`, `redirect_uri`, and PKCE `code_verifier` in `backend/temp/gmail_oauth_state.json` between auth start and callback. Without the stored verifier, Google returns `(invalid_grant) Missing code verifier`.
 - `POST /api/campaign-leads/<campaign_lead_id>/gmail-draft` uses only reviewed `final_email`; `email_draft` is never sent to Gmail directly.
-- Gmail draft subject is deterministic, not AI-generated: `Quick question for {lead.name}` when the lead has a name, otherwise `Quick question`.
+- Gmail draft subjects are generated through the existing AI email provider settings at draft-creation time, using `final_email` plus lead/campaign/business-rule context. The subject is stored in `campaign_leads.gmail_subject`.
+- Subject generation prompts must return one concise subject only, use a curiosity-driven sales tone, include the contact/lead name naturally when present, avoid polished corporate wording, avoid spammy/clickbait wording, avoid invented claims, and should vary from generic templates such as `Quick question`.
 - Gmail draft creation is blocked for `contacted`, `closed`, `skipped`, and `do_not_contact` campaign stages.
-- Successful Gmail draft creation stores `gmail_draft_id`, `gmail_message_id`, `gmail_draft_status='created'`, and `gmail_drafted_at`, and advances earlier stages to `approved`.
+- Successful Gmail draft creation stores `gmail_subject`, `gmail_draft_id`, `gmail_message_id`, `gmail_draft_status='created'`, and `gmail_drafted_at`, and advances earlier stages to `approved`.
 - Gmail failures store `gmail_draft_status='failed'` and a short `gmail_error`; token material and email bodies should not be logged.
 - If Gmail status or draft creation logs `accessNotConfigured`, enable the Gmail API in the same Google Cloud project as the OAuth client and wait a few minutes for propagation.
 

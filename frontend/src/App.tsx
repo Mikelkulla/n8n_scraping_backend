@@ -2179,6 +2179,10 @@ function CampaignLeadDetail({
           <strong>{lead.gmail_draft_id || lead.gmail_draft_status || "-"}</strong>
         </div>
         <div>
+          <span className="label">Gmail subject</span>
+          <strong>{lead.gmail_subject || "-"}</strong>
+        </div>
+        <div>
           <span className="label">Gmail account</span>
           <strong>{gmail?.authenticated ? gmail.account_email || "Connected" : "Not connected"}</strong>
         </div>

@@ -13,6 +13,21 @@ Avoid spammy wording, pressure tactics, and exaggerated promises.
 Return only the email body."""
 
 DEFAULT_EMAIL_USER_PROMPT = """Write a personalized outreach email for this lead.
+Variation requirements:
+- Use the template as inspiration, not as a fixed script.
+- Vary sentence order, opening line, pain framing, CTA, and wording across leads.
+- Choose one style naturally: direct problem-first, casual observation, question-led, website-context-led, or short founder-style note.
+- Use one specific detail from the website context if available.
+- Avoid repeated stock phrases like “I saw you’re”, “Usually companies at this stage”, “Looking at your setup”, and “If you’re open to it”.
+- Keep the email between 60 and 130 words.
+- CTA should vary between a call, asking permission to send an idea, or offering to map out one improvement.
+
+Avoid these repeated phrases unless they are clearly the best fit:
+- I saw you're
+- Usually companies at this stage
+- Looking at your setup
+- If you're open to it
+- quick 15-minute call
 
 Template:
 Hi [Name],
@@ -22,9 +37,8 @@ I saw you're [specific description about their business].
 Usually companies at this stage struggle with [very specific problem].
 
 I've built systems that:
-
-* Automatically qualify leads by asking targeted questions and tagging them in Airtable/CRM based on their responses
-* Automate business workflows using Google Apps Script to connect tools, streamline data processing, and reduce manual tasks across operations
+- Automatically qualify leads by asking targeted questions and tagging them in Airtable/CRM based on their responses
+- Automate business workflows using Google Apps Script to connect tools, streamline data processing, and reduce manual tasks across operations
 
 Looking at your setup, I already see a couple of areas where automation could save serious time.
 
@@ -174,6 +188,7 @@ class Database:
     def _run_compatible_additive_migrations(self, cursor):
         """Runs cheap additive migrations for already-versioned local databases."""
         self._add_missing_columns(cursor, "campaign_leads", {
+            "gmail_subject": "TEXT",
             "gmail_draft_id": "TEXT",
             "gmail_message_id": "TEXT",
             "gmail_draft_status": "TEXT",
@@ -353,6 +368,7 @@ class Database:
                 email_draft TEXT,
                 final_email TEXT,
                 campaign_notes TEXT,
+                gmail_subject TEXT,
                 gmail_draft_id TEXT,
                 gmail_message_id TEXT,
                 gmail_draft_status TEXT,
@@ -376,6 +392,7 @@ class Database:
             "contacted_at": "TIMESTAMP",
         })
         self._add_missing_columns(cursor, "campaign_leads", {
+            "gmail_subject": "TEXT",
             "gmail_draft_id": "TEXT",
             "gmail_message_id": "TEXT",
             "gmail_draft_status": "TEXT",
@@ -1571,7 +1588,7 @@ class Database:
         leads = self.list_campaign_leads(row["campaign_id"])
         return next((lead for lead in leads if lead["campaign_lead_id"] == campaign_lead_id), None)
 
-    def store_gmail_draft_metadata(self, campaign_lead_id, draft_id=None, message_id=None, status="created", error=None):
+    def store_gmail_draft_metadata(self, campaign_lead_id, draft_id=None, message_id=None, subject=None, status="created", error=None):
         """Stores Gmail draft metadata without changing generated or final email copy."""
         self.cursor.execute("SELECT campaign_id, stage FROM campaign_leads WHERE campaign_lead_id = ?", (campaign_lead_id,))
         row = self.cursor.fetchone()
@@ -1584,7 +1601,8 @@ class Database:
 
         self.cursor.execute("""
             UPDATE campaign_leads
-            SET gmail_draft_id = ?,
+            SET gmail_subject = COALESCE(?, gmail_subject),
+                gmail_draft_id = ?,
                 gmail_message_id = ?,
                 gmail_draft_status = ?,
                 gmail_drafted_at = CASE WHEN ? = 'created' THEN CURRENT_TIMESTAMP ELSE gmail_drafted_at END,
@@ -1592,7 +1610,7 @@ class Database:
                 stage = ?,
                 updated_at = CURRENT_TIMESTAMP
             WHERE campaign_lead_id = ?
-        """, (draft_id, message_id, status, status, error, next_stage, campaign_lead_id))
+        """, (subject, draft_id, message_id, status, status, error, next_stage, campaign_lead_id))
         self.cursor.execute(
             "UPDATE campaigns SET updated_at = CURRENT_TIMESTAMP WHERE campaign_id = ?",
             (row["campaign_id"],),

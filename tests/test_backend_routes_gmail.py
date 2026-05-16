@@ -105,12 +105,15 @@ def test_create_gmail_draft_stores_metadata_without_overwriting_copy(tmp_path):
     client, db_factory = create_test_client(db_path)
 
     with patch("backend.routes.api.Database", side_effect=db_factory):
-        with patch("backend.routes.api.create_gmail_draft", return_value={"draft_id": "draft-1", "message_id": "msg-1"}) as create:
-            response = client.post(f"/api/campaign-leads/{campaign_lead_id}/gmail-draft")
+        with patch("backend.routes.api.generate_email_subject", return_value="Helping Good Dentist save time") as generate_subject:
+            with patch("backend.routes.api.create_gmail_draft", return_value={"draft_id": "draft-1", "message_id": "msg-1"}) as create:
+                response = client.post(f"/api/campaign-leads/{campaign_lead_id}/gmail-draft")
 
     assert response.status_code == 200
+    generate_subject.assert_called_once()
     create.assert_called_once()
     payload = response.get_json()["campaign_lead"]
+    assert payload["gmail_subject"] == "Helping Good Dentist save time"
     assert payload["gmail_draft_id"] == "draft-1"
     assert payload["gmail_message_id"] == "msg-1"
     assert payload["gmail_draft_status"] == "created"
@@ -124,8 +127,9 @@ def test_create_gmail_draft_persists_safe_error(tmp_path):
     client, db_factory = create_test_client(db_path)
 
     with patch("backend.routes.api.Database", side_effect=db_factory):
-        with patch("backend.routes.api.create_gmail_draft", side_effect=GmailIntegrationError("Gmail is not authenticated")):
-            response = client.post(f"/api/campaign-leads/{campaign_lead_id}/gmail-draft")
+        with patch("backend.routes.api.generate_email_subject", return_value="Helping Good Dentist save time"):
+            with patch("backend.routes.api.create_gmail_draft", side_effect=GmailIntegrationError("Gmail is not authenticated")):
+                response = client.post(f"/api/campaign-leads/{campaign_lead_id}/gmail-draft")
 
     assert response.status_code == 400
     with Database(db_path=db_path) as db:
