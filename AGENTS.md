@@ -260,6 +260,10 @@ Important columns:
 Uniqueness:
 - Campaign lead membership is unique by `(campaign_id, lead_id)`.
 
+Implementation behavior:
+- Campaign `stage` is campaign-specific, but setting a campaign lead stage to `contacted` also updates the linked base `leads.lead_status` to `contacted` so the Leads tab reflects completed outreach.
+- Startup compatibility migrations backfill this same status for existing `campaign_leads.stage='contacted'` rows, except base leads already marked `do_not_contact`.
+
 ### `app_settings`
 
 Simple key/value settings table for local application configuration.
@@ -845,7 +849,7 @@ Current behavior:
 
 ## Campaign Workflow
 
-Campaigns are a workflow layer over existing leads. Lead records remain the source of truth for business/contact data, and campaign stages do not overwrite base lead status.
+Campaigns are a workflow layer over existing leads. Lead records remain the source of truth for business/contact data. Campaign stages are campaign-specific, with one intentional sync: when a campaign lead is marked `contacted`, the linked base lead's `lead_status` is also set to `contacted`. Existing contacted campaign memberships are backfilled on startup unless the base lead is already `do_not_contact`.
 
 Current behavior:
 - Campaigns are created from filters matching `/api/leads`, including scrape status, email/website/phone presence, lead flag, lead review status, business type, and search location.
@@ -853,7 +857,7 @@ Current behavior:
 - Campaign creation stores the filters JSON and links matching leads in `campaign_leads` with initial stage `review`.
 - Leads can belong to multiple campaigns; `/api/leads` includes `campaign_count`, `campaign_names`, and detailed `campaign_memberships`.
 - The Leads tab shows a Campaign column and expanded lead details list campaign memberships.
-- The Campaigns tab lists campaigns, creates campaigns, opens campaign detail, filters campaign leads by stage/search, updates stage and priority inline, edits campaign notes/email draft/final email, marks leads contacted, and exports campaign CSV.
+- The Campaigns tab lists campaigns, creates campaigns, opens campaign detail, filters campaign leads by stage/search, updates stage and priority inline, edits campaign notes/email draft/final email, marks leads contacted, and exports campaign CSV. Marking a campaign lead contacted also marks the global lead review status as `contacted`.
 - Campaign detail stage counts are interactive buttons. Selecting a stage button filters the campaign lead table to that exact stage; selecting `All` shows every campaign lead. When a lead is moved from one stage to another, it should disappear from the previous active stage view after the campaign lead query refreshes.
 
 ## AI-Assisted Campaign Email Drafting

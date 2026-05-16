@@ -195,6 +195,22 @@ class Database:
             "gmail_drafted_at": "TIMESTAMP",
             "gmail_error": "TEXT",
         })
+        self._sync_contacted_campaign_lead_statuses(cursor)
+
+    def _sync_contacted_campaign_lead_statuses(self, cursor):
+        """Backfills base lead review status from contacted campaign memberships."""
+        cursor.execute("""
+            UPDATE leads
+            SET lead_status = 'contacted',
+                updated_at = CURRENT_TIMESTAMP
+            WHERE COALESCE(lead_status, '') != 'do_not_contact'
+              AND EXISTS (
+                  SELECT 1
+                  FROM campaign_leads cl
+                  WHERE cl.lead_id = leads.lead_id
+                    AND cl.stage = 'contacted'
+              )
+        """)
 
     def _migrate_to_v1(self, cursor):
         """Creates the current schema and migrates pre-versioned databases."""
@@ -1577,10 +1593,18 @@ class Database:
             if self.cursor.rowcount == 0:
                 return None
 
-        self.cursor.execute("SELECT campaign_id FROM campaign_leads WHERE campaign_lead_id = ?", (campaign_lead_id,))
+        self.cursor.execute("SELECT campaign_id, lead_id FROM campaign_leads WHERE campaign_lead_id = ?", (campaign_lead_id,))
         row = self.cursor.fetchone()
         if not row:
             return None
+        if stage == "contacted":
+            self.cursor.execute("""
+                UPDATE leads
+                SET lead_status = 'contacted',
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE lead_id = ?
+                  AND COALESCE(lead_status, '') != 'do_not_contact'
+            """, (row["lead_id"],))
         self.cursor.execute(
             "UPDATE campaigns SET updated_at = CURRENT_TIMESTAMP WHERE campaign_id = ?",
             (row["campaign_id"],),

@@ -77,6 +77,7 @@ export function useUpdateCampaignLead() {
       void queryClient.invalidateQueries({ queryKey: queryKeys.campaigns });
       void queryClient.invalidateQueries({ queryKey: queryKeys.campaign(variables.campaignId) });
       void queryClient.invalidateQueries({ queryKey: ["campaign-leads", variables.campaignId] });
+      void queryClient.invalidateQueries({ queryKey: ["leads"] });
     },
   });
 }

@@ -591,6 +591,59 @@ class TestDatabase:
             assert leads[0]["campaign_count"] == 1
             assert leads[0]["campaign_names"] == ["Dentists London May 2026"]
 
+    def test_contacted_campaign_stage_updates_global_lead_status(self, temp_db):
+        """Test marking a campaign lead contacted updates the base lead status."""
+        db, _ = temp_db
+        with db as conn:
+            conn.insert_job_execution("job1", "google_maps_scrape", "dentist:London, UK", status="completed")
+            execution = conn.get_job_execution("job1", "google_maps_scrape")
+            conn.insert_lead(
+                execution_id=execution["execution_id"],
+                place_id="place1",
+                location="dentist:London, UK",
+                name="Good Dentist",
+                website="https://example.com",
+                emails="hello@example.com",
+            )
+            result = conn.create_campaign("Dentists London May 2026", filters={"has_email": True})
+            campaign_lead = conn.list_campaign_leads(result["campaign"]["campaign_id"])[0]
+
+            updated = conn.update_campaign_lead(
+                campaign_lead["campaign_lead_id"],
+                stage="contacted",
+                contacted_at="2026-05-16T10:00:00Z",
+            )
+
+            assert updated["stage"] == "contacted"
+            assert updated["lead_status"] == "contacted"
+            assert conn.list_leads()[0]["lead_status"] == "contacted"
+
+    def test_contacted_campaign_stage_backfills_global_lead_status(self, tmp_path):
+        """Test startup backfills already-contacted campaign leads."""
+        db_path = tmp_path / "test.db"
+        Database(db_path=str(db_path)).initialize()
+        with Database(db_path=str(db_path)) as conn:
+            conn.insert_job_execution("job1", "google_maps_scrape", "dentist:London, UK", status="completed")
+            execution = conn.get_job_execution("job1", "google_maps_scrape")
+            conn.insert_lead(
+                execution_id=execution["execution_id"],
+                place_id="place1",
+                location="dentist:London, UK",
+                name="Good Dentist",
+                emails="hello@example.com",
+            )
+            result = conn.create_campaign("Dentists London May 2026", filters={"has_email": True})
+            campaign_lead = conn.list_campaign_leads(result["campaign"]["campaign_id"])[0]
+            conn.cursor.execute(
+                "UPDATE campaign_leads SET stage = 'contacted' WHERE campaign_lead_id = ?",
+                (campaign_lead["campaign_lead_id"],),
+            )
+
+        Database(db_path=str(db_path)).initialize()
+
+        with Database(db_path=str(db_path)) as conn:
+            assert conn.list_leads()[0]["lead_status"] == "contacted"
+
     def test_email_settings_and_business_rules_persist(self, temp_db):
         """Test AI email settings and business-type rules."""
         db, _ = temp_db
